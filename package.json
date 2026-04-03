@@ -2,7 +2,6 @@
   "name": "voxagent",
   "version": "0.1.0",
   "description": "Voice-powered terminal agent. Fully offline. Speak commands, get answers.",
-  "main": "lib/index.js",
   "bin": {
     "voxagent": "./bin/voxagent.js"
   },
@@ -26,7 +25,14 @@
     "local",
     "privacy"
   ],
-  "author": "",
+  "author": "Analytics in Motion",
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE",
+    "ATTRIBUTION.md"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

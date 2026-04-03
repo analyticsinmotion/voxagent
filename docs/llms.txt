@@ -1,0 +1,45 @@
+# voxagent
+
+> Voice-powered terminal agent. Fully offline.
+
+voxagent is a command-line tool that captures your voice, transcribes it locally with whisper.cpp, sends it to a local Ollama LLM, and prints the response. Nothing leaves your machine.
+
+## Install
+
+```
+npm install -g voxagent
+```
+
+## Requirements
+
+- Node.js 18+
+- Ollama running locally (https://ollama.com)
+- A microphone
+
+First run downloads a whisper model (~150 MB), cached locally for future use.
+
+## Usage
+
+```
+voxagent                  # Start voice agent (default model: llama3.2)
+voxagent --model mistral  # Use a different Ollama model
+voxagent --debug          # Show audio levels and raw whisper output
+```
+
+## How it works
+
+1. decibri captures microphone audio as PCM
+2. whisper.cpp transcribes speech to text locally
+3. Ollama generates a response from your local LLM
+
+Every step runs on your machine. No cloud, no API keys, no network calls.
+
+## Links
+
+- Website: https://voxagent.run
+- GitHub: https://github.com/analyticsinmotion/voxagent
+- npm: https://www.npmjs.com/package/voxagent
+
+## License
+
+Apache 2.0 - Analytics in Motion

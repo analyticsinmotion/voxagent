@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>voxagent — Voice-powered terminal agent</title>
+  <meta name="description" content="Fully offline voice agent for your terminal. Speak commands, get answers. Powered by decibri, whisper.cpp, and Ollama. No cloud, no API keys.">
+  <meta property="og:title" content="voxagent — Voice-powered terminal agent">
+  <meta property="og:description" content="Speak commands, get answers. Fully offline. Nothing leaves your machine.">
+  <meta property="og:image" content="https://voxagent.run/assets/voxagent-og-image.png">
+  <meta property="og:url" content="https://voxagent.run">
+  <meta property="og:type" content="website">
+  <link rel="canonical" href="https://voxagent.run">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ── Dark theme (default) ──────────────────────────────────── */
+    [data-theme="dark"] {
+      --bg-primary: #0b0c10;
+      --bg-secondary: #12141a;
+      --bg-tertiary: #1a1d26;
+      --bg-card: #151820;
+      --accent: #e8913a;
+      --accent-dim: rgba(232, 145, 58, 0.12);
+      --accent-border: rgba(232, 145, 58, 0.2);
+      --accent-glow: rgba(232, 145, 58, 0.06);
+      --text-primary: #e2e4ea;
+      --text-secondary: #8b8fa4;
+      --text-muted: #5a5e72;
+      --green: #4ade80;
+      --terminal-bg: #0a0b0e;
+      --terminal-border: #1e2130;
+      --nav-bg: rgba(11, 12, 16, 0.85);
+      --toggle-bg: #1e2130;
+      --toggle-knob: #e2e4ea;
+      --code-bg: var(--bg-tertiary);
+    }
+
+    /* ── Light theme ───────────────────────────────────────────── */
+    [data-theme="light"] {
+      --bg-primary: #f8f8fa;
+      --bg-secondary: #f0f0f4;
+      --bg-tertiary: #e8e8ee;
+      --bg-card: #ffffff;
+      --accent: #d47a24;
+      --accent-dim: rgba(212, 122, 36, 0.08);
+      --accent-border: rgba(212, 122, 36, 0.2);
+      --accent-glow: rgba(212, 122, 36, 0.04);
+      --text-primary: #1a1c24;
+      --text-secondary: #5c6070;
+      --text-muted: #9498a8;
+      --green: #16a34a;
+      --terminal-bg: #ffffff;
+      --terminal-border: #d8dae0;
+      --nav-bg: rgba(248, 248, 250, 0.85);
+      --toggle-bg: #d8dae0;
+      --toggle-knob: #ffffff;
+      --code-bg: var(--bg-tertiary);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    /* ── Noise overlay ─────────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── Nav ────────────────────────────────────────────────────── */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: var(--nav-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--terminal-border);
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .nav-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-brand {
+      font-family: 'Outfit', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text-primary);
+      text-decoration: none;
+      letter-spacing: -0.5px;
+    }
+
+    .nav-brand .accent { color: var(--accent); }
+
+    .nav-controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .nav-github {
+      color: var(--text-secondary);
+      transition: color 0.2s;
+      display: flex;
+      align-items: center;
+    }
+
+    .nav-github:hover { color: var(--text-primary); }
+
+    /* ── Theme toggle switch ───────────────────────────────────── */
+    .theme-toggle {
+      position: relative;
+      width: 52px;
+      height: 28px;
+      background: var(--toggle-bg);
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background 0.3s;
+      border: none;
+      padding: 0;
+      display: flex;
+      align-items: center;
+    }
+
+    .theme-toggle .knob {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      background: var(--toggle-knob);
+      border-radius: 50%;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.3s, background 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+
+    [data-theme="dark"] .theme-toggle .knob {
+      transform: translateX(24px);
+    }
+
+    .theme-toggle .icon-sun,
+    .theme-toggle .icon-moon {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      transition: opacity 0.3s;
+    }
+
+    .theme-toggle .icon-sun {
+      left: 7px;
+      color: #f59e0b;
+    }
+
+    .theme-toggle .icon-moon {
+      right: 7px;
+      color: #8b8fa4;
+    }
+
+    [data-theme="dark"] .theme-toggle .icon-sun { opacity: 0.4; }
+    [data-theme="dark"] .theme-toggle .icon-moon { opacity: 1; }
+    [data-theme="light"] .theme-toggle .icon-sun { opacity: 1; }
+    [data-theme="light"] .theme-toggle .icon-moon { opacity: 0.4; }
+
+    /* ── Hero ───────────────────────────────────────────────────── */
+    .hero {
+      padding: 120px 0 80px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero h1 {
+      font-size: 56px;
+      font-weight: 700;
+      letter-spacing: -2px;
+      line-height: 1.1;
+      margin-bottom: 16px;
+    }
+
+    .hero h1 .accent { color: var(--accent); }
+
+    .hero .subtitle {
+      font-size: 20px;
+      font-weight: 300;
+      color: var(--text-secondary);
+      max-width: 480px;
+      margin: 0 auto 40px;
+      line-height: 1.5;
+    }
+
+    .install-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .install-cmd {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--terminal-border);
+      padding: 12px 20px;
+      border-radius: 8px;
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    .install-cmd:hover { border-color: var(--accent-border); }
+    .install-cmd .dollar { color: var(--accent); user-select: none; }
+    .install-cmd .copy-icon { color: var(--text-muted); transition: color 0.2s; }
+    .install-cmd:hover .copy-icon { color: var(--text-secondary); }
+
+
+
+    /* ── Terminal demo ──────────────────────────────────────────── */
+    .demo { padding: 0 0 80px; }
+
+    .terminal {
+      background: var(--terminal-bg);
+      border: 1px solid var(--terminal-border);
+      border-radius: 12px;
+      overflow: hidden;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .terminal-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--bg-tertiary);
+      border-bottom: 1px solid var(--terminal-border);
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .terminal-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green { background: #28c840; }
+
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-right: 44px;
+    }
+
+    .terminal-body {
+      padding: 20px 24px;
+      color: var(--text-secondary);
+      overflow-x: auto;
+    }
+
+    .terminal-body .prompt { color: var(--accent); }
+    .terminal-body .cmd { color: var(--text-primary); }
+    .terminal-body .dim { color: var(--text-muted); }
+    .terminal-body .user { color: var(--green); }
+    .terminal-body .response { color: var(--text-primary); }
+    .terminal-body .blank { height: 22px; }
+
+    /* ── Section styling ───────────────────────────────────────── */
+    section { padding: 80px 0; }
+
+    section h2 {
+      font-size: 32px;
+      font-weight: 600;
+      letter-spacing: -1px;
+      margin-bottom: 12px;
+    }
+
+    section h2 .accent { color: var(--accent); }
+
+    section .section-sub {
+      font-size: 16px;
+      color: var(--text-secondary);
+      margin-bottom: 48px;
+      max-width: 520px;
+    }
+
+    /* ── Pipeline ──────────────────────────────────────────────── */
+    .pipeline {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .pipeline-step {
+      flex: 1;
+      min-width: 200px;
+      max-width: 260px;
+      padding: 28px 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--terminal-border);
+      position: relative;
+      text-align: center;
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .pipeline-step:first-child { border-radius: 12px 0 0 12px; }
+    .pipeline-step:last-child { border-radius: 0 12px 12px 0; }
+    .pipeline-step:not(:last-child) { border-right: none; }
+
+    .pipeline-step .step-number {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .pipeline-step .step-icon { font-size: 28px; margin-bottom: 12px; }
+    .pipeline-step h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+    .pipeline-step p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+    .pipeline-arrow {
+      display: flex;
+      align-items: center;
+      color: var(--accent);
+      font-size: 20px;
+      padding: 0 2px;
+      align-self: center;
+    }
+
+    /* ── Features grid ─────────────────────────────────────────── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    .feature-card {
+      padding: 28px 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--terminal-border);
+      border-radius: 10px;
+      transition: border-color 0.2s, background 0.3s;
+    }
+
+    .feature-card:hover { border-color: var(--accent-border); }
+
+    .feature-card h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .feature-card h3 .icon { color: var(--accent); font-size: 16px; }
+
+    .feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+
+    .feature-card code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: background 0.3s;
+    }
+
+    /* ── Quick start ───────────────────────────────────────────── */
+    .quickstart-block {
+      background: var(--terminal-bg);
+      border: 1px solid var(--terminal-border);
+      border-radius: 10px;
+      padding: 24px 28px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 2;
+      overflow-x: auto;
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    .quickstart-block .comment { color: var(--text-muted); }
+    .quickstart-block .prompt { color: var(--accent); }
+    .quickstart-block .cmd { color: var(--text-primary); }
+
+    /* ── Powered by ────────────────────────────────────────────── */
+    .powered-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .powered-card {
+      padding: 24px 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--terminal-border);
+      border-radius: 10px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.2s, background 0.3s;
+      text-align: center;
+    }
+
+    .powered-card:hover { border-color: var(--accent-border); }
+    .powered-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; color: var(--text-primary); }
+    .powered-card p { font-size: 13px; color: var(--text-secondary); }
+
+    /* ── Footer ────────────────────────────────────────────────── */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid var(--terminal-border);
+      text-align: center;
+      transition: border-color 0.3s;
+    }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a {
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--accent); }
+    .footer-copy { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Copy tooltip ──────────────────────────────────────────── */
+    .install-cmd .copied {
+      position: absolute;
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--green);
+      opacity: 0;
+      transition: opacity 0.2s;
+      white-space: nowrap;
+    }
+
+    .install-cmd .copied.show { opacity: 1; }
+
+    /* ── Mobile responsive ─────────────────────────────────────── */
+    @media (max-width: 700px) {
+      .hero { padding: 90px 0 60px; }
+      .hero h1 { font-size: 38px; }
+      .hero .subtitle { font-size: 17px; }
+
+      .install-row { flex-direction: column; gap: 12px; }
+      .install-cmd { width: 100%; justify-content: center; }
+
+      .pipeline { flex-direction: column; align-items: stretch; }
+      .pipeline-step {
+        border-radius: 10px !important;
+        border-right: 1px solid var(--terminal-border) !important;
+        max-width: 100%;
+      }
+      .pipeline-arrow { transform: rotate(90deg); padding: 8px 0; justify-content: center; }
+
+      section h2 { font-size: 26px; }
+      section { padding: 60px 0; }
+
+      .features-grid { grid-template-columns: 1fr; }
+      .powered-grid { grid-template-columns: 1fr; }
+
+      .terminal-body { padding: 16px; font-size: 12px; }
+      .quickstart-block { padding: 16px 20px; font-size: 12px; }
+
+      .nav-inner { padding: 0 16px; }
+      .container { padding: 0 16px; }
+    }
+
+    @media (max-width: 400px) {
+      .hero h1 { font-size: 32px; }
+      .nav-controls { gap: 12px; }
+      .theme-toggle { width: 46px; height: 24px; }
+      .theme-toggle .knob { width: 18px; height: 18px; }
+      [data-theme="dark"] .theme-toggle .knob { transform: translateX(22px); }
+    }
+  </style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "voxagent",
+    "description": "Voice-powered terminal agent. Fully offline. Speak commands, get answers.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Windows, macOS, Linux",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "url": "https://voxagent.run",
+    "downloadUrl": "https://www.npmjs.com/package/voxagent",
+    "softwareVersion": "0.1.0",
+    "license": "https://opensource.org/licenses/Apache-2.0",
+    "author": { "@type": "Organization", "name": "Analytics in Motion", "url": "https://analyticsinmotion.com" }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- ════════ Nav ════════ -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-brand">vox<span class="accent">agent</span></a>
+      <div class="nav-controls">
+        <a href="https://github.com/analyticsinmotion/voxagent" class="nav-github" target="_blank" rel="noopener" aria-label="GitHub">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+        <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+          <div class="knob"></div>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ════════ Hero ════════ -->
+  <div class="hero">
+    <div class="container">
+      <h1>vox<span class="accent">agent</span></h1>
+      <p class="subtitle">Voice-powered terminal agent. Speak commands, get answers. Nothing leaves your machine.</p>
+      <div class="install-row">
+        <div class="install-cmd" onclick="copyInstall(this)">
+          <span class="dollar">$</span>
+          <span class="cmd-text">npm install -g voxagent</span>
+          <svg class="copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          <span class="copied">Copied!</span>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ Terminal demo ════════ -->
+  <div class="demo">
+    <div class="container">
+      <div class="terminal">
+        <div class="terminal-header">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <div class="terminal-title">voxagent</div>
+        </div>
+        <div class="terminal-body">
+          <div><span class="prompt">$</span> <span class="cmd">voxagent</span></div>
+          <div class="blank"></div>
+          <div><span class="dim">voxagent v0.1.0 — voice-powered terminal</span></div>
+          <div><span class="dim">Ollama connected. Model: llama3.2</span></div>
+          <div><span class="dim">Whisper model ready.</span></div>
+          <div class="blank"></div>
+          <div>Press ENTER to speak...</div>
+          <div><span class="dim">[Recording...]</span> Press ENTER to stop.</div>
+          <div class="blank"></div>
+          <div><span class="dim">Transcribing...</span></div>
+          <div><span class="user">You:</span> What's the default port for PostgreSQL?</div>
+          <div class="blank"></div>
+          <div><span class="dim">Thinking...</span></div>
+          <div class="response">PostgreSQL runs on port 5432 by default. This is the standard</div>
+          <div class="response">port configured in postgresql.conf under the "port" setting.</div>
+          <div class="blank"></div>
+          <div>Press ENTER to speak...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ How it works ════════ -->
+  <section>
+    <div class="container">
+      <h2>How it <span class="accent">works</span></h2>
+      <p class="section-sub">Three steps, all on your machine. No cloud, no API keys, no network calls.</p>
+      <div class="pipeline">
+        <div class="pipeline-step">
+          <div class="step-number">Step 01</div>
+          <div class="step-icon">🎙️</div>
+          <h3>You speak</h3>
+          <p>decibri captures microphone audio as raw PCM. Cross-platform, prebuilt binaries.</p>
+        </div>
+        <div class="pipeline-arrow">→</div>
+        <div class="pipeline-step">
+          <div class="step-number">Step 02</div>
+          <div class="step-icon">📝</div>
+          <h3>Whisper transcribes</h3>
+          <p>whisper.cpp converts speech to text locally. GPU-accelerated when available.</p>
+        </div>
+        <div class="pipeline-arrow">→</div>
+        <div class="pipeline-step">
+          <div class="step-number">Step 03</div>
+          <div class="step-icon">🤖</div>
+          <h3>Ollama responds</h3>
+          <p>Your local LLM generates the answer. Any Ollama model. Default: llama3.2.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Features ════════ -->
+  <section>
+    <div class="container">
+      <h2>Built for <span class="accent">developers</span></h2>
+      <p class="section-sub">A voice interface that respects your machine, your data, and your workflow.</p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <h3><span class="icon">⬡</span> Fully offline</h3>
+          <p>No cloud services. No API keys. No accounts. No recurring cost. Everything runs on your hardware.</p>
+        </div>
+        <div class="feature-card">
+          <h3><span class="icon">⬡</span> Cross-platform</h3>
+          <p>Windows, macOS, and Linux. Prebuilt native binaries via decibri handle platform differences.</p>
+        </div>
+        <div class="feature-card">
+          <h3><span class="icon">⬡</span> Any model</h3>
+          <p>Works with any Ollama model. Swap models with <code>--model mistral</code> or use the default llama3.2.</p>
+        </div>
+        <div class="feature-card">
+          <h3><span class="icon">⬡</span> Privacy first</h3>
+          <p>No audio is recorded, stored, or transmitted. Ever. Your voice stays on your machine.</p>
+        </div>
+        <div class="feature-card">
+          <h3><span class="icon">⬡</span> Open source</h3>
+          <p>Apache 2.0 licensed. Inspect the code, contribute, or fork it. Built in the open on GitHub.</p>
+        </div>
+        <div class="feature-card">
+          <h3><span class="icon">⬡</span> Debug mode</h3>
+          <p>Run with <code>--debug</code> to see audio levels, capture duration, and raw whisper output.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Quick start ════════ -->
+  <section>
+    <div class="container">
+      <h2>Quick <span class="accent">start</span></h2>
+      <p class="section-sub">Three commands. No configuration needed.</p>
+      <div class="quickstart-block">
+        <div><span class="comment"># Install voxagent</span></div>
+        <div><span class="prompt">$</span> <span class="cmd">npm install -g voxagent</span></div>
+        <div style="height:16px"></div>
+        <div><span class="comment"># Make sure Ollama has a model</span></div>
+        <div><span class="prompt">$</span> <span class="cmd">ollama pull llama3.2</span></div>
+        <div style="height:16px"></div>
+        <div><span class="comment"># Run</span></div>
+        <div><span class="prompt">$</span> <span class="cmd">voxagent</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Requirements ════════ -->
+  <section>
+    <div class="container">
+      <h2>Requirements</h2>
+      <p class="section-sub" style="margin-bottom:24px">Minimal setup. No cloud accounts.</p>
+      <div style="font-size:15px;color:var(--text-secondary);line-height:2.2">
+        <div>✓ &nbsp;Node.js 18+</div>
+        <div>✓ &nbsp;<a href="https://ollama.com" style="color:var(--accent);text-decoration:none">Ollama</a> running locally</div>
+        <div>✓ &nbsp;A microphone</div>
+        <div style="height:12px"></div>
+        <div style="color:var(--text-muted);font-size:13px">First run downloads a whisper model (~150 MB). Cached locally for future use.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Powered by ════════ -->
+  <section>
+    <div class="container">
+      <h2>Powered <span class="accent">by</span></h2>
+      <p class="section-sub">Built on proven open-source foundations.</p>
+      <div class="powered-grid">
+        <a href="https://decibri.dev" class="powered-card" target="_blank" rel="noopener">
+          <h3>decibri</h3>
+          <p>Cross-platform microphone capture for Node.js</p>
+        </a>
+        <a href="https://github.com/ggml-org/whisper.cpp" class="powered-card" target="_blank" rel="noopener">
+          <h3>whisper.cpp</h3>
+          <p>Local speech-to-text by OpenAI Whisper</p>
+        </a>
+        <a href="https://ollama.com" class="powered-card" target="_blank" rel="noopener">
+          <h3>Ollama</h3>
+          <p>Local LLM runtime for dozens of models</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════ Footer ════════ -->
+  <footer>
+    <div class="container">
+      <div class="footer-links">
+        <a href="https://github.com/analyticsinmotion/voxagent">GitHub</a>
+        <a href="https://www.npmjs.com/package/voxagent">npm</a>
+        <a href="https://analyticsinmotion.com">Analytics in Motion</a>
+      </div>
+      <div class="footer-copy">Apache 2.0 &nbsp;·&nbsp; © 2026 Analytics in Motion</div>
+    </div>
+  </footer>
+
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      localStorage.setItem('voxagent-theme', next);
+    }
+
+    function copyInstall(el) {
+      navigator.clipboard.writeText('npm install -g voxagent');
+      const tip = el.querySelector('.copied');
+      tip.classList.add('show');
+      setTimeout(() => tip.classList.remove('show'), 1500);
+    }
+
+    // Restore saved theme
+    (function() {
+      const saved = localStorage.getItem('voxagent-theme');
+      if (saved) {
+        document.documentElement.setAttribute('data-theme', saved);
+      }
+    })();
+  </script>
+</body>
+</html>

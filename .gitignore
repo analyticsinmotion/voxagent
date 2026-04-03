@@ -1,3 +1,8 @@
 node_modules/
 *.tmp
-debug-capture.wav
+*.wav
+*.log
+.DS_Store
+.env
+.env.local
+.claude/
