@@ -18,7 +18,7 @@ Press a key, speak, get an answer. Nothing leaves your machine.
   <tr>
     <td><strong>Powered by</strong></td>
     <td>
-      <a href="https://decibri.dev"><img src="https://img.shields.io/badge/decibri-mic%20capture-brightgreen" alt="decibri"></a>&nbsp;
+      <a href="https://decibri.com"><img src="https://img.shields.io/badge/decibri-mic%20capture-brightgreen" alt="decibri"></a>&nbsp;
       <a href="https://github.com/ggml-org/whisper.cpp"><img src="https://img.shields.io/badge/whisper.cpp-local%20STT-brightgreen" alt="whisper.cpp"></a>&nbsp;
       <a href="https://ollama.com"><img src="https://img.shields.io/badge/Ollama-local%20LLM-brightgreen" alt="Ollama"></a>
     </td>
@@ -69,13 +69,13 @@ Press ENTER to speak...
 
 ## How it works
 
-voxagent captures your voice with [decibri](https://decibri.dev), transcribes it locally with [whisper.cpp](https://github.com/ggerganov/whisper.cpp), sends the text to your local [Ollama](https://ollama.com) model, and prints the response.
+voxagent captures your voice with [decibri](https://decibri.com), transcribes it locally with [whisper.cpp](https://github.com/ggerganov/whisper.cpp), sends the text to your local [Ollama](https://ollama.com) model, and prints the response.
 
 No audio is recorded, stored, or transmitted. Ever.
 
 ## Powered by
 
-- [decibri](https://decibri.dev) - cross-platform microphone capture
+- [decibri](https://decibri.com) - cross-platform microphone capture
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) - local speech-to-text
 - [Ollama](https://ollama.com) - local LLM inference
 
