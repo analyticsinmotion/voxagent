@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { parseArgs } = require('node:util');
 
-const { waitForKey, print, printError, printTranscript, printResponse, printStatus, printBanner } = require('../lib/ui');
+const { waitForKey, restoreTerminal, print, printError, printTranscript, printResponse, printStatus, printBanner } = require('../lib/ui');
 const { ensureModel } = require('../lib/model');
 const { checkConnection, hasModel, loadModel: loadLanguageModel, ask, DEFAULT_MODEL } = require('../lib/llm');
 
@@ -22,6 +22,7 @@ const OPTIONS = {
   model: { type: 'string' },
   device: { type: 'string' },
   'list-devices': { type: 'boolean' },
+  denoise: { type: 'boolean' },
   debug: { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
@@ -36,6 +37,7 @@ Options:
   --model <name>            Ollama model to use (default: ${DEFAULT_MODEL})
   --device <id-or-name>     Input device to record from (default: the system default)
   --list-devices            List the available input devices and exit
+  --denoise                 Reduce background noise before transcription
   --debug                   Save each recording to debug-capture.wav in the current directory
   --help, -h                Show this help message
   --version, -v             Show version number
@@ -104,6 +106,7 @@ function parseCommandLine(argv) {
     model: requireValue(values, 'model') || DEFAULT_MODEL,
     device: requireValue(values, 'device'),
     listDevices: values['list-devices'] === true,
+    denoise: values.denoise === true,
     debug: values.debug === true,
   };
 }
@@ -185,22 +188,88 @@ function reportNativeLoadFailure(err) {
 // decibri and the whisper addon are loaded here rather than at the top of the file, so
 // that --help, --version and every argument error work on a machine where neither
 // native module can load.
+let capture = null;
+
 function loadCapture() {
+  if (capture) {
+    return capture;
+  }
+
   try {
-    return require('../lib/capture');
+    capture = require('../lib/capture');
+    return capture;
   } catch (err) {
     reportNativeLoadFailure(err);
   }
 }
 
-function loadStt() {
+// Transcription runs in a child process, because whisper writes its diagnostics from
+// native code straight to the process file descriptors and nothing inside this process
+// can hide them. The child reports a whisper addon it cannot load rather than crashing
+// without an explanation.
+async function startWhisper(debug) {
   checkWhisperPlatform(process.platform, process.arch);
 
+  const whisper = require('../lib/whisper').start({ debug });
+
   try {
-    return require('../lib/stt');
+    await whisper.ready();
   } catch (err) {
+    whisper.stop();
     reportNativeLoadFailure(err);
   }
+
+  return whisper;
+}
+
+// Cleanup
+
+let whisperHost = null;
+let cleanedUp = false;
+
+// Releases the microphone, stops the transcription child and returns the terminal to
+// its normal mode. Every exit path runs this, so the device is never left open.
+function cleanup() {
+  if (cleanedUp) {
+    return;
+  }
+
+  cleanedUp = true;
+
+  try {
+    if (capture) {
+      capture.releaseMicrophone();
+    }
+  } catch (err) {
+    // Nothing further can be done about a device that will not close here.
+  }
+
+  try {
+    if (whisperHost) {
+      whisperHost.stop();
+    }
+  } catch (err) {
+    // Nothing further can be done about a child that will not stop here.
+  }
+
+  restoreTerminal();
+}
+
+function registerCleanup() {
+  process.on('exit', cleanup);
+
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
+    process.on(signal, () => {
+      cleanup();
+      process.exit(0);
+    });
+  }
+
+  process.on('uncaughtException', (err) => {
+    cleanup();
+    printError(err.message);
+    process.exit(1);
+  });
 }
 
 // Devices
@@ -248,12 +317,23 @@ function resolveRequestedDevice(selector) {
 // Main
 
 async function main() {
-  const { model, device, listDevices, debug } = parseCommandLine(process.argv);
+  const { model, device, listDevices, denoise, debug } = parseCommandLine(process.argv);
 
   if (listDevices) {
     printDevices();
     return;
   }
+
+  // voxagent is driven by single key presses, which needs a terminal. With input
+  // redirected or piped there is no press to wait for, so this stops here rather than
+  // running the whole startup and then ending without saying why.
+  if (!process.stdin.isTTY) {
+    printError('voxagent needs an interactive terminal.');
+    print('Run it in a terminal rather than with input redirected or piped.');
+    process.exit(1);
+  }
+
+  registerCleanup();
 
   printBanner(VERSION);
 
@@ -309,45 +389,72 @@ async function main() {
     process.exit(1);
   }
 
-  const { transcribe, loadModel } = loadStt();
+  whisperHost = await startWhisper(debug);
 
   // Loading here pays the model read and the backend initialisation before the first
   // prompt, so the first transcription costs no more than any later one.
   printStatus('Loading whisper model...');
   try {
-    await loadModel(modelPath);
+    await whisperHost.loadModel(modelPath);
   } catch (err) {
     printError(`Failed to load whisper model: ${err.message}`);
     process.exit(1);
   }
   printStatus('Whisper model ready.');
 
-  const { startCapture, stopCapture } = loadCapture();
+  const recorder = loadCapture();
 
   print('');
 
   // Main loop
   while (true) {
     print('Press ENTER to speak, or Ctrl+C to quit.');
-    await waitForKey();
+    await waitForKey().promise;
 
-    print('[Recording...] Press ENTER to stop.');
-    const handle = startCapture(selectedDevice);
-    await waitForKey();
-    const pcmBuffer = stopCapture(handle);
+    let result;
 
-    const durationSec = (pcmBuffer.length / 2 / 16000).toFixed(1);
-    printStatus(`Captured ${durationSec}s of audio (${pcmBuffer.length} bytes)`);
+    try {
+      result = await recorder.record({
+        device: selectedDevice,
+        denoise,
+        stopKey: waitForKey(),
+        onLive: () => print('Recording. It stops when you stop speaking, or press ENTER to stop now.'),
+      });
+    } catch (err) {
+      printError(recorder.deviceErrorMessage(err));
+      process.exit(1);
+    }
 
-    // Check minimum recording length (~1 second at 16kHz 16-bit mono)
-    if (pcmBuffer.length < 32000) {
+    // A device that fails during a recording ends that recording and nothing more,
+    // so the next turn can start as soon as the device is back.
+    if (result.ending === recorder.ENDING.DEVICE_ERROR) {
+      printError(recorder.deviceErrorMessage(result.error));
+      print('');
+      continue;
+    }
+
+    const durationSec = (result.audio.length / 2 / recorder.SAMPLE_RATE).toFixed(1);
+    printStatus(`Captured ${durationSec}s of audio (${result.audio.length} bytes)`);
+
+    // A recording the detector heard no speech in is never transcribed, so a silent
+    // recording cannot reach the language model as a question.
+    if (!result.speechDetected) {
+      print('No speech detected.\n');
+      continue;
+    }
+
+    if (result.audio.length < 32000) {
       print('Recording too short. Try again.\n');
       continue;
     }
 
+    if (result.ending === recorder.ENDING.TOO_LONG) {
+      printStatus(`Reached the maximum recording length of ${recorder.MAX_RECORDING_MS / 1000} seconds.`);
+    }
+
     try {
       printStatus('Transcribing...');
-      const text = await transcribe(pcmBuffer, modelPath, debug);
+      const text = await whisperHost.transcribe(result.audio, modelPath, debug);
 
       if (!text || !text.trim()) {
         print('No speech detected.\n');
@@ -369,6 +476,7 @@ async function main() {
 
 if (require.main === module) {
   main().catch((err) => {
+    cleanup();
     printError(err.message);
     process.exit(1);
   });
@@ -382,4 +490,7 @@ module.exports = {
   whisperTargets,
   checkWhisperPlatform,
   missingLibraryError,
+  loadCapture,
+  cleanup,
+  registerCleanup,
 };

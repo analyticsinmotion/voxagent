@@ -48,6 +48,7 @@ Everything tracked in this repository is public. Code comments, test names, log 
 - No commercial or strategic material, such as usage figures, customer names, pricing or plans.
 - No names of other products offered as comparisons, and no comparisons with the names removed. Naming a dependency or a file format the code uses is allowed.
 - No benchmark of this project against another project.
+- No statement of what has or has not been tested or verified, and no caveat about how well a feature works.
 - No personal names, machine names, account identifiers, device serials or file paths that contain a person's name.
 - No em dashes and no contractions.
 
