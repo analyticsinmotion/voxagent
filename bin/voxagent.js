@@ -4,7 +4,7 @@
 const { waitForKey, print, printError, printTranscript, printResponse, printStatus, printBanner } = require('../lib/ui');
 const { startCapture, stopCapture } = require('../lib/capture');
 const { ensureModel } = require('../lib/model');
-const { transcribe } = require('../lib/stt');
+const { transcribe, loadModel } = require('../lib/stt');
 const { checkConnection, ask, DEFAULT_MODEL } = require('../lib/llm');
 
 const VERSION = '0.1.0';
@@ -16,6 +16,7 @@ Voice-powered terminal agent. Fully offline.
 
 Options:
   --model <name>   Ollama model to use (default: ${DEFAULT_MODEL})
+  --debug          Save each recording to debug-capture.wav in the current directory
   --help, -h       Show this help message
   --version, -v    Show version number
 `;
@@ -61,6 +62,16 @@ async function main() {
     modelPath = await ensureModel();
   } catch (err) {
     printError(`Failed to set up whisper model: ${err.message}`);
+    process.exit(1);
+  }
+
+  // Loading here pays the model read and the backend initialisation before the first
+  // prompt, so the first transcription costs no more than any later one.
+  printStatus('Loading whisper model...');
+  try {
+    await loadModel(modelPath);
+  } catch (err) {
+    printError(`Failed to load whisper model: ${err.message}`);
     process.exit(1);
   }
   printStatus('Whisper model ready.');
