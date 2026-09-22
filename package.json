@@ -40,7 +40,7 @@
   },
   "homepage": "https://voxagent.run",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^18.3.0 || ^20 || >=21"
   },
   "dependencies": {
     "@kutalia/whisper-node-addon": "^1.0.0",
