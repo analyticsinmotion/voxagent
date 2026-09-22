@@ -43,8 +43,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "decibri": "^1.0.0",
     "@kutalia/whisper-node-addon": "^1.0.0",
+    "decibri": "^5.7.0",
     "ollama": "^0.5.0"
   }
 }
