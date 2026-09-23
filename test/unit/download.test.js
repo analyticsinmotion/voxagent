@@ -1,8 +1,10 @@
 'use strict';
 
 // Checks the whisper model download against a local server: a correct file is
-// renamed into place, every kind of bad body is refused and leaves no file, a model
-// file of the wrong size is replaced, and redirects are followed within a limit.
+// renamed into place, every kind of bad body is refused and leaves no file, the
+// temporary file is closed before it is removed, a failure to remove it is reported,
+// a model file of the wrong size is replaced, and redirects are followed within a
+// limit.
 
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert');
@@ -26,6 +28,104 @@ let server;
 let base;
 let dir;
 let output;
+let watch;
+
+// Records, in order, every open of a temporary download file with the descriptor it
+// returned, every completed close of one of those descriptors, and every call that
+// removes a temporary download file, with the descriptors still open at that moment.
+// The download and its write stream reach the file through these fs functions. With
+// removeFirst, the file is deleted just before each removal runs, so the removal
+// finds it already gone.
+function watchTemporaryFile(options) {
+  const settings = { removeFirst: false, ...options };
+  const events = [];
+  const openDescriptors = new Set();
+  const real = {};
+  const isTemporary = (target) => String(target).endsWith('.tmp');
+
+  const replace = (name, wrapper) => {
+    real[name] = fs[name];
+    fs[name] = wrapper;
+  };
+
+  replace('open', function watchedOpen(target, ...rest) {
+    const callback = rest[rest.length - 1];
+
+    if (isTemporary(target) && typeof callback === 'function') {
+      rest[rest.length - 1] = (err, fd) => {
+        if (!err) {
+          openDescriptors.add(fd);
+          events.push({ event: 'open', fd });
+        }
+        callback(err, fd);
+      };
+    }
+
+    return real.open.call(this, target, ...rest);
+  });
+
+  replace('close', function watchedClose(fd, callback) {
+    if (!openDescriptors.has(fd)) {
+      return real.close.call(this, fd, callback);
+    }
+
+    return real.close.call(this, fd, (err) => {
+      if (!err) {
+        openDescriptors.delete(fd);
+        events.push({ event: 'close', fd });
+      }
+      if (callback) {
+        callback(err);
+      }
+    });
+  });
+
+  for (const name of ['unlink', 'unlinkSync', 'rm', 'rmSync']) {
+    replace(name, function watchedRemove(target, ...rest) {
+      if (isTemporary(target)) {
+        events.push({ event: 'remove', method: name, stillOpen: [...openDescriptors] });
+
+        if (settings.removeFirst) {
+          try {
+            real.unlinkSync(target);
+          } catch (err) {
+            // The file does not exist yet, which leaves the removal to find it gone.
+          }
+        }
+      }
+
+      return real[name].call(this, target, ...rest);
+    });
+  }
+
+  return {
+    events,
+    stillOpen: () => [...openDescriptors],
+    restore() {
+      for (const [name, fn] of Object.entries(real)) {
+        fs[name] = fn;
+      }
+    },
+  };
+}
+
+// The temporary file was opened, every descriptor opened on it was closed before
+// the first call that removed it, and none is left open.
+function assertClosedBeforeRemoval(watched) {
+  const events = watched.events;
+  const firstRemoval = events.findIndex((entry) => entry.event === 'remove');
+  const opens = events.filter((entry) => entry.event === 'open');
+
+  assert.ok(opens.length > 0, `the temporary file was opened: ${JSON.stringify(events)}`);
+  assert.ok(firstRemoval >= 0, `the temporary file was removed: ${JSON.stringify(events)}`);
+
+  for (const opened of opens) {
+    const closedAt = events.findIndex((entry) => entry.event === 'close' && entry.fd === opened.fd);
+    assert.ok(closedAt >= 0 && closedAt < firstRemoval, `descriptor ${opened.fd} was closed before the file was removed: ${JSON.stringify(events)}`);
+  }
+
+  assert.deepStrictEqual(watched.stillOpen(), [], 'no descriptor of the temporary file is left open');
+}
 
 // Routes:
 //   /file              the correct body
@@ -96,6 +196,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (watch) {
+    watch.restore();
+    watch = null;
+  }
   output.restore();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -119,25 +223,60 @@ describe('the download', { timeout: 120000 }, () => {
     assert.strictEqual(fs.existsSync(`${dest}.tmp`), false);
   });
 
-  it('refuses a body cut short and leaves no file', async () => {
+  it('refuses a body cut short, closes the temporary file before removing it, and leaves no file', async () => {
+    watch = watchTemporaryFile();
     const { dest, done } = fetchTo('/short');
 
     await assert.rejects(done, /download did not complete.*Run voxagent again/);
+    assertClosedBeforeRemoval(watch);
     assertNoFile(dest);
   });
 
-  it('refuses a complete body of the wrong length and leaves no file', async () => {
+  it('refuses a complete body of the wrong length, closes the temporary file before removing it, and leaves no file', async () => {
+    watch = watchTemporaryFile();
     const { dest, done } = fetchTo('/wrong-length');
 
     await assert.rejects(done, /download incomplete, 2048 bytes received where 4096 is expected/);
+    assertClosedBeforeRemoval(watch);
     assertNoFile(dest);
   });
 
-  it('refuses a body of the right length with one byte changed and leaves no file', async () => {
+  it('refuses a body of the right length with one byte changed, closes the temporary file before removing it, and leaves no file', async () => {
+    watch = watchTemporaryFile();
     const { dest, done } = fetchTo('/flipped');
 
     await assert.rejects(done, /download corrupt, SHA-256 [0-9a-f]{64} where [0-9a-f]{64} is expected/);
+    assertClosedBeforeRemoval(watch);
     assertNoFile(dest);
+  });
+
+  it('reports only the download error when the temporary file is already gone as it is removed', async () => {
+    watch = watchTemporaryFile({ removeFirst: true });
+    const { dest, done } = fetchTo('/short');
+
+    await assert.rejects(done, (err) => {
+      assert.match(err.message, /^download did not complete, .*\. Run voxagent again to download it again\.$/);
+      return true;
+    });
+    assertClosedBeforeRemoval(watch);
+    assertNoFile(dest);
+  });
+
+  it('reports a temporary file it cannot remove together with the download error', async () => {
+    const dest = path.join(dir, 'model.bin');
+    const tmp = `${dest}.tmp`;
+
+    // A directory where the temporary file belongs can be neither opened as the file
+    // nor removed as one.
+    fs.mkdirSync(tmp);
+
+    await assert.rejects(ensureModel({ url: `${base}/file`, dest, ...EXPECTED }), (err) => {
+      assert.ok(err.cause && err.cause.syscall === 'open', `the download error is the failed open: ${err.stack}`);
+      assert.ok(err.message.startsWith(`${err.cause.message} The partial download ${tmp} could not be removed: `), err.message);
+      return true;
+    });
+    assert.ok(fs.statSync(tmp).isDirectory());
+    assert.strictEqual(fs.existsSync(dest), false);
   });
 });
 

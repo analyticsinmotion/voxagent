@@ -10,6 +10,9 @@
 //   empty       return no segments, as the addon does when it has no model
 //   unloadable  a message the whisper function throws as it is loaded
 //   log         a file each call is appended to, as one JSON object per line
+//
+// The first line of the log records the library search path variables the child
+// was started with, which is what the dynamic loader would read.
 
 const fs = require('fs');
 
@@ -58,4 +61,8 @@ Object.defineProperty(exportsOfBinary, 'whisper', {
 });
 
 stubModule(whisperBinaryPath(process.platform, process.arch), exportsOfBinary);
-record({ event: 'preloaded' });
+record({
+  event: 'preloaded',
+  LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH === undefined ? null : process.env.LD_LIBRARY_PATH,
+  DYLD_LIBRARY_PATH: process.env.DYLD_LIBRARY_PATH === undefined ? null : process.env.DYLD_LIBRARY_PATH,
+});

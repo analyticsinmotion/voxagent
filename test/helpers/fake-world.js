@@ -165,7 +165,13 @@ stubModule(path.join(LIB, 'model.js'), {
   },
 });
 
+// The platform check reads where the addon's binaries are from lib/whisper.js, so the
+// stand-in keeps those two functions from the real module.
+const { whisperDist, whisperBinary } = require(path.join(LIB, 'whisper.js'));
+
 stubModule(path.join(LIB, 'whisper.js'), {
+  whisperDist,
+  whisperBinary,
   start(options) {
     note('whisper.start', { debug: options.debug });
 

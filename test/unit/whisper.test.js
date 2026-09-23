@@ -1,10 +1,11 @@
 'use strict';
 
-// Checks lib/whisper.js: the lines that mark a failed call, and the transcription
-// child itself, forked for real and running lib/stt.js over a stand-in for the
-// native whisper function. Covers what reaches the user's terminal, how a failure
-// is reported, how often the child is started, and that the audio travels to the
-// child through a pipe and never through a file.
+// Checks lib/whisper.js: the lines that mark a failed call, the library search path
+// the child is started with on each platform, and the transcription child itself,
+// forked for real and running lib/stt.js over a stand-in for the native whisper
+// function. Covers what reaches the user's terminal, how a failure is reported, how
+// often the child is started, the environment it receives, and that the audio
+// travels to the child through a pipe and never through a file.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -15,11 +16,12 @@ const path = require('path');
 
 const { lib, helper } = require('../helpers/repo');
 const fsSpy = require('../helpers/fs-spy');
+const { whisperDist } = require('../helpers/modules');
 
-// Counts every child forked and every byte written to a child's standard input.
-// lib/whisper.js takes fork from child_process as it loads, so this is in place
-// before it is required.
-const counts = { forks: 0, stdinBytes: 0 };
+// Counts every child forked and every byte written to a child's standard input, and
+// keeps the last child forked. lib/whisper.js takes fork from child_process as it
+// loads, so this is in place before it is required.
+const counts = { forks: 0, stdinBytes: 0, lastChild: null };
 const realFork = childProcess.fork;
 
 childProcess.fork = function countingFork(...args) {
@@ -27,6 +29,7 @@ childProcess.fork = function countingFork(...args) {
   const realWrite = child.stdin.write.bind(child.stdin);
 
   counts.forks += 1;
+  counts.lastChild = child;
   child.stdin.write = (chunk, ...rest) => {
     counts.stdinBytes += chunk.length;
     return realWrite(chunk, ...rest);
@@ -138,6 +141,55 @@ describe('the lines that mark a failed call', () => {
   });
 });
 
+describe('the library search path the transcription child is started with', () => {
+  const linuxDir = path.join(whisperDist(), 'linux-x64');
+  const macDir = path.join(whisperDist(), 'mac-arm64');
+  const base = { PATH: 'a path', HOME: 'a home' };
+
+  it('puts the directory holding the Linux binary and libwhisper.so.1 in LD_LIBRARY_PATH on Linux', () => {
+    assert.deepStrictEqual(whisper.childEnvironment({ ...base }, 'linux', 'x64'), { ...base, LD_LIBRARY_PATH: linuxDir });
+    assert.ok(fs.existsSync(path.join(linuxDir, 'whisper.node')));
+    assert.ok(fs.existsSync(path.join(linuxDir, 'libwhisper.so.1')));
+  });
+
+  it('keeps an existing LD_LIBRARY_PATH after that directory', () => {
+    const env = whisper.childEnvironment({ ...base, LD_LIBRARY_PATH: '/opt/one:/opt/two' }, 'linux', 'x64');
+    assert.strictEqual(env.LD_LIBRARY_PATH, `${linuxDir}:/opt/one:/opt/two`);
+  });
+
+  it('adds no empty entry, which would name the current directory, when LD_LIBRARY_PATH is empty', () => {
+    assert.strictEqual(whisper.childEnvironment({ ...base, LD_LIBRARY_PATH: '' }, 'linux', 'x64').LD_LIBRARY_PATH, linuxDir);
+  });
+
+  it('puts dist/mac-arm64, which holds libwhisper.1.dylib, in DYLD_LIBRARY_PATH on macOS on Apple Silicon', () => {
+    assert.deepStrictEqual(whisper.childEnvironment({ ...base }, 'darwin', 'arm64'), { ...base, DYLD_LIBRARY_PATH: macDir });
+    assert.ok(fs.existsSync(path.join(macDir, 'whisper.node')));
+    assert.ok(fs.existsSync(path.join(macDir, 'libwhisper.1.dylib')));
+  });
+
+  it('keeps an existing DYLD_LIBRARY_PATH after that directory, and leaves LD_LIBRARY_PATH alone on macOS', () => {
+    const env = whisper.childEnvironment({ ...base, DYLD_LIBRARY_PATH: '/opt/one', LD_LIBRARY_PATH: '/opt/two' }, 'darwin', 'arm64');
+    assert.strictEqual(env.DYLD_LIBRARY_PATH, `${macDir}:/opt/one`);
+    assert.strictEqual(env.LD_LIBRARY_PATH, '/opt/two');
+  });
+
+  it('returns the environment unchanged on Windows, and on macOS on Intel, which has no binary', () => {
+    const env = { ...base, LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' };
+
+    assert.strictEqual(whisper.childEnvironment(env, 'win32', 'x64'), env);
+    assert.strictEqual(whisper.childEnvironment(env, 'darwin', 'x64'), env);
+    assert.deepStrictEqual(env, { ...base, LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' });
+  });
+
+  it('never changes the environment it is given', () => {
+    const env = { ...base, LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' };
+
+    whisper.childEnvironment(env, 'linux', 'x64');
+    whisper.childEnvironment(env, 'darwin', 'arm64');
+    assert.deepStrictEqual(env, { ...base, LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' });
+  });
+});
+
 describe('the transcription child', () => {
   let dir;
 
@@ -216,7 +268,80 @@ describe('the transcription child', () => {
     return seen;
   }
 
-  const readCalls = (log) => fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => entry.keys);
+  const readLog = (log) => fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const readCalls = (log) => readLog(log).filter((entry) => entry.keys);
+
+  const LIBRARY_PATH_NAMES = ['LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH'];
+
+  const libraryPaths = (env) => Object.fromEntries(LIBRARY_PATH_NAMES.map((name) => [name, env[name] === undefined ? null : env[name]]));
+
+  // Starts the real child while process.platform and process.arch report the given
+  // pair and this process holds the given library path variables. Returns the
+  // variables the child was started with, and the ones this process held straight
+  // after the fork.
+  async function startAs(platform, arch, variables) {
+    const log = path.join(dir, `library-path-${platform}-${arch}.log`);
+    const saved = {
+      platform: Object.getOwnPropertyDescriptor(process, 'platform'),
+      arch: Object.getOwnPropertyDescriptor(process, 'arch'),
+      env: libraryPaths(process.env),
+    };
+    const setVariables = (values) => {
+      for (const name of LIBRARY_PATH_NAMES) {
+        if (values[name] === undefined || values[name] === null) {
+          delete process.env[name];
+        } else {
+          process.env[name] = values[name];
+        }
+      }
+    };
+    let host;
+    let parent;
+
+    setVariables(variables);
+    Object.defineProperty(process, 'platform', { ...saved.platform, value: platform });
+    Object.defineProperty(process, 'arch', { ...saved.arch, value: arch });
+
+    try {
+      host = startChild({ log });
+      parent = libraryPaths(process.env);
+    } finally {
+      Object.defineProperty(process, 'platform', saved.platform);
+      Object.defineProperty(process, 'arch', saved.arch);
+      setVariables(saved.env);
+    }
+
+    try {
+      await host.ready();
+    } finally {
+      host.stop();
+    }
+
+    const preloaded = readLog(log).find((entry) => entry.event === 'preloaded');
+
+    return { child: libraryPaths(preloaded), parent };
+  }
+
+  it('is started on Linux with the binary directory first in LD_LIBRARY_PATH, and this process keeps its own value', TIMEOUT, async () => {
+    const { child, parent } = await startAs('linux', 'x64', { LD_LIBRARY_PATH: '/opt/existing' });
+
+    assert.deepStrictEqual(child, { LD_LIBRARY_PATH: `${path.join(whisperDist(), 'linux-x64')}:/opt/existing`, DYLD_LIBRARY_PATH: null });
+    assert.deepStrictEqual(parent, { LD_LIBRARY_PATH: '/opt/existing', DYLD_LIBRARY_PATH: null });
+  });
+
+  it('is started on macOS on Apple Silicon with dist/mac-arm64 first in DYLD_LIBRARY_PATH, and this process keeps its own value', TIMEOUT, async () => {
+    const { child, parent } = await startAs('darwin', 'arm64', { DYLD_LIBRARY_PATH: '/opt/existing' });
+
+    assert.deepStrictEqual(child, { LD_LIBRARY_PATH: null, DYLD_LIBRARY_PATH: `${path.join(whisperDist(), 'mac-arm64')}:/opt/existing` });
+    assert.deepStrictEqual(parent, { LD_LIBRARY_PATH: null, DYLD_LIBRARY_PATH: '/opt/existing' });
+  });
+
+  it('is started on Windows with the library path variables this process holds, unchanged', TIMEOUT, async () => {
+    const { child, parent } = await startAs('win32', 'x64', { LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' });
+
+    assert.deepStrictEqual(child, { LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' });
+    assert.deepStrictEqual(parent, { LD_LIBRARY_PATH: '/opt/one', DYLD_LIBRARY_PATH: '/opt/two' });
+  });
 
   it('loads the model and transcribes twice in one child, returning the transcript', TIMEOUT, async () => {
     const log = path.join(dir, 'calls-twice.log');
@@ -335,6 +460,7 @@ describe('the transcription child', () => {
     let afterTranscribe;
     let parentWrites;
     let host;
+    let child;
 
     // The child's working directory is inherited, so a recording written by the
     // positive control below lands in the work directory.
@@ -342,6 +468,7 @@ describe('the transcription child', () => {
 
     try {
       host = startChild({}, { preload: [helper('fs-spy')], env: { VOXAGENT_TEST_FS_LOG: childLog } });
+      child = counts.lastChild;
       await host.ready();
       await host.loadModel(MODEL);
 
@@ -379,7 +506,19 @@ describe('the transcription child', () => {
       }
     }
 
+    // The child writes its record while it is exiting, before it releases its working
+    // directory, the work directory. Windows refuses to remove a directory that a
+    // running process has as its working directory, so the test ends only once the
+    // child has exited. stop() unreferences the child, so the wait polls on a timer,
+    // which keeps this process running until then.
+    const exitDeadline = Date.now() + 10000;
+
+    while (child && child.exitCode === null && child.signalCode === null && Date.now() < exitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
     assert.ok(childRecord, 'the child wrote its record of filesystem calls');
+    assert.ok(child && (child.exitCode !== null || child.signalCode !== null), 'the child has exited');
 
     const childPathWrites = childRecord.calls.filter((call) => call.kind === 'path');
     const debugWrites = childPathWrites.filter((call) => call.target.endsWith('debug-capture.wav'));

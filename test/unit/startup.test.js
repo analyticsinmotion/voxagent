@@ -2,7 +2,8 @@
 
 // Checks what voxagent confirms before it starts: the Ollama model match, the one
 // Ollama client, the platforms the whisper addon can load on, the missing Visual
-// C++ runtime check, and the supported Node range and dependency versions.
+// C++ runtime check, the missing Linux system library check, and the supported Node
+// range and dependency versions.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -174,6 +175,70 @@ describe('the missing Visual C++ runtime check', { timeout: 120000 }, () => {
   it('does not blame the runtime for another load failure or another error code', () => {
     assert.strictEqual(cli.missingLibraryError(dlopenError(`${present} is not a valid Win32 application.\r\n${present}`)), null);
     assert.strictEqual(cli.missingLibraryError(Object.assign(new Error(`The specified module could not be found.\r\n${present}`), { code: 'MODULE_NOT_FOUND' })), null);
+  });
+});
+
+describe('the missing Linux system library check', { timeout: 120000 }, () => {
+  // What the transcription child reports when the dynamic loader cannot find a
+  // library, in the form the loader wrote for libwhisper.so.1 on Linux.
+  const loadError = (name) => new Error(`Failed to load native addon: Error: ${name}: cannot open shared object file: No such file or directory`);
+
+  it('names the Vulkan loader and the GNU OpenMP runtime with the package that provides each', () => {
+    assert.deepStrictEqual(cli.missingLinuxLibrary(loadError('libvulkan.so.1')), { name: 'libvulkan.so.1', description: 'the Vulkan loader', pkg: 'libvulkan1' });
+    assert.deepStrictEqual(cli.missingLinuxLibrary(loadError('libgomp.so.1')), { name: 'libgomp.so.1', description: 'the GNU OpenMP runtime', pkg: 'libgomp1' });
+  });
+
+  it('finds the library inside a wrapping error, through the cause chain', () => {
+    const outer = new Error('Cannot load the addon.', { cause: loadError('libvulkan.so.1') });
+    assert.strictEqual(cli.missingLinuxLibrary(outer).name, 'libvulkan.so.1');
+  });
+
+  it('names no system library when the missing one is shipped with the addon, or the error is of another kind', () => {
+    assert.strictEqual(cli.missingLinuxLibrary(loadError('libwhisper.so.1')), null);
+    assert.strictEqual(cli.missingLinuxLibrary(loadError('libggml-vulkan.so')), null);
+    assert.strictEqual(cli.missingLinuxLibrary(new Error("/lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by libggml-base.so)")), null);
+  });
+
+  // Runs reportNativeLoadFailure in a child whose process.platform reports the given
+  // platform. The standard streams are created first, because Node creates each on
+  // first use and chooses from the platform whether a pipe is written synchronously,
+  // and output written asynchronously is lost when the process exits.
+  const report = (platform, name) => runNode(['-e', [
+    'process.stdout; process.stderr;',
+    `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });`,
+    `require(${JSON.stringify(BIN)}).reportNativeLoadFailure(new Error(${JSON.stringify(loadError(name).message)}));`,
+    "console.log('returned');",
+  ].join(' ')], { cwd: REPO });
+
+  it('exits 1 on Linux naming the missing Vulkan loader and how to install it', async () => {
+    const run = await report('linux', 'libvulkan.so.1');
+
+    assert.strictEqual(run.status, 1, describeRun(run));
+    assert.deepStrictEqual(run.lines, [
+      'Error: A native module could not load because a library it needs is missing.',
+      'voxagent needs the Vulkan loader, libvulkan.so.1, on Linux.',
+      'On Debian and Ubuntu, install it with: sudo apt install libvulkan1',
+    ]);
+  });
+
+  it('exits 1 on Linux naming the missing GNU OpenMP runtime and how to install it', async () => {
+    const run = await report('linux', 'libgomp.so.1');
+
+    assert.strictEqual(run.status, 1, describeRun(run));
+    assert.deepStrictEqual(run.lines, [
+      'Error: A native module could not load because a library it needs is missing.',
+      'voxagent needs the GNU OpenMP runtime, libgomp.so.1, on Linux.',
+      'On Debian and Ubuntu, install it with: sudo apt install libgomp1',
+    ]);
+  });
+
+  it('exits 1 with the loader error as it stands for a library the addon ships, and on another platform', async () => {
+    for (const [platform, name] of [['linux', 'libwhisper.so.1'], ['darwin', 'libvulkan.so.1']]) {
+      const run = await report(platform, name);
+
+      assert.strictEqual(run.status, 1, describeRun(run));
+      assert.deepStrictEqual(run.lines, [`Error: ${loadError(name).message}`]);
+    }
   });
 });
 

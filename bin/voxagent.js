@@ -2,20 +2,25 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const { parseArgs } = require('node:util');
 
 const { waitForKey, restoreTerminal, print, printError, printTranscript, printResponse, printStatus, printBanner } = require('../lib/ui');
 const { ensureModel } = require('../lib/model');
 const { checkConnection, hasModel, loadModel: loadLanguageModel, ask, DEFAULT_MODEL } = require('../lib/llm');
+const { whisperDist, whisperBinary } = require('../lib/whisper');
 
 const VERSION = require('../package.json').version;
-
-const WHISPER_PACKAGE = '@kutalia/whisper-node-addon';
 
 const VC_REDIST_URL = {
   arm64: 'https://aka.ms/vs/17/release/vc_redist.arm64.exe',
   x64: 'https://aka.ms/vs/17/release/vc_redist.x64.exe',
+};
+
+// System libraries the whisper addon's Linux build needs and does not ship, with the
+// Debian and Ubuntu package that provides each.
+const LINUX_SYSTEM_LIBRARIES = {
+  'libgomp.so.1': { description: 'the GNU OpenMP runtime', pkg: 'libgomp1' },
+  'libvulkan.so.1': { description: 'the Vulkan loader', pkg: 'libvulkan1' },
 };
 
 const OPTIONS = {
@@ -124,25 +129,9 @@ function parseCommandLine(argv) {
 
 // Native modules
 
-// The whisper addon resolves its binary as <package>/dist/<platform>-<arch>/whisper.node
-// from the values process.platform and process.arch report, and it does that while it is
-// being required. It ships its macOS binaries under dist/mac-<arch> instead, a name that
-// resolution never reaches, so on macOS on Apple Silicon lib/stt.js loads
-// dist/mac-arm64/whisper.node itself. macOS on Intel is never supported: decibri ships no
-// binary for it, and the addon's mac-x64 directory holds the same arm64 binaries as
-// mac-arm64. Returns where the binary for a pair is loaded from, or null.
-function whisperBinary(dist, platform, arch) {
-  if (platform === 'darwin') {
-    return arch === 'arm64' ? path.join(dist, 'mac-arm64', 'whisper.node') : null;
-  }
-
-  return path.join(dist, `${platform}-${arch}`, 'whisper.node');
-}
-
-// The pairs with a binary at the path their loader uses. require.resolve locates the
-// package without running it.
+// The pairs with a binary at the path their loader uses.
 function whisperTargets() {
-  const dist = path.join(path.dirname(require.resolve(WHISPER_PACKAGE)), '..');
+  const dist = whisperDist();
   const targets = [];
 
   for (const platform of ['darwin', 'linux', 'win32']) {
@@ -199,11 +188,38 @@ function missingLibraryError(err) {
   return null;
 }
 
+// On Linux the dynamic loader reports the first library it cannot find as
+// "<name>: cannot open shared object file: No such file or directory". Returns the
+// entry for that library when it is one of the system libraries above, or null. The
+// load error may be wrapped, so the cause chain is walked.
+function missingLinuxLibrary(err) {
+  let depth = 0;
+
+  for (let current = err; current && depth < 16; current = current.cause, depth++) {
+    const found = /([^\s:]+): cannot open shared object file: No such file or directory/.exec(String(current.message));
+
+    if (found && LINUX_SYSTEM_LIBRARIES[found[1]]) {
+      return { name: found[1], ...LINUX_SYSTEM_LIBRARIES[found[1]] };
+    }
+  }
+
+  return null;
+}
+
 function reportNativeLoadFailure(err) {
   if (process.platform === 'win32' && missingLibraryError(err)) {
     printError('A native module could not load because a library it needs is missing.');
     print('voxagent needs the Microsoft Visual C++ Redistributable on Windows.');
     print(`Install it from ${VC_REDIST_URL[process.arch] || VC_REDIST_URL.x64}`);
+    process.exit(1);
+  }
+
+  const library = process.platform === 'linux' ? missingLinuxLibrary(err) : null;
+
+  if (library) {
+    printError('A native module could not load because a library it needs is missing.');
+    print(`voxagent needs ${library.description}, ${library.name}, on Linux.`);
+    print(`On Debian and Ubuntu, install it with: sudo apt install ${library.pkg}`);
     process.exit(1);
   }
 
@@ -588,6 +604,8 @@ module.exports = {
   whisperTargets,
   checkWhisperPlatform,
   missingLibraryError,
+  missingLinuxLibrary,
+  reportNativeLoadFailure,
   loadCapture,
   cleanup,
   registerCleanup,
