@@ -1,38 +1,64 @@
 # voxagent
 
-> Voice-powered terminal agent. Fully offline.
-
-voxagent is a command-line tool that captures your voice, transcribes it locally with whisper.cpp, sends it to a local Ollama LLM, and prints the response. Nothing leaves your machine.
+> voxagent is a voice agent for the terminal. It records a spoken question with decibri, transcribes it on your machine with whisper.cpp, and prints the answer from a local model in Ollama. Your audio and your questions never leave your machine.
 
 ## Install
 
 ```
 npm install -g voxagent
+ollama pull llama3.2
+voxagent
 ```
+
+On its first run, voxagent also downloads the whisper model, about 150 MB.
 
 ## Requirements
 
-- Node.js 18+
-- Ollama running locally (https://ollama.com)
-- A microphone
+- Windows x64, with the Microsoft Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe
+- macOS 14 or later on Apple Silicon
+- Linux x64 with glibc 2.38 or later, such as Ubuntu 24.04 or Debian 13, with the Vulkan loader, the GNU OpenMP runtime and the ALSA library. On Debian and Ubuntu: sudo apt install libvulkan1 libgomp1 libasound2t64
+- Node.js 18.3 or later, except Node.js 19
+- Ollama, installed and running on the same machine: https://ollama.com
+- A microphone, except with --file
 
-First run downloads a whisper model (~150 MB), cached locally for future use.
-
-## Usage
-
-```
-voxagent                  # Start voice agent (default model: llama3.2)
-voxagent --model mistral  # Use a different Ollama model
-voxagent --debug          # Show audio levels and raw whisper output
-```
+Intel Macs, and ARM64 on Windows and Linux, are not supported.
 
 ## How it works
 
-1. decibri captures microphone audio as PCM
-2. whisper.cpp transcribes speech to text locally
-3. Ollama generates a response from your local LLM
+- Press Enter at the prompt and ask your question out loud.
+- The recording stops 1.5 seconds after you stop speaking, at once when you press Enter again, after 8 seconds if no speech is heard, and at 60 seconds.
+- A recording in which no speech is heard is not transcribed.
+- voxagent transcribes speech as English, with the whisper model base.en.
+- Press Ctrl+C to quit.
+- The microphone is open only while a recording runs.
+- Each question goes to the model on its own, without the earlier questions or answers.
 
-Every step runs on your machine. No cloud, no API keys, no network calls.
+## Options
+
+- --model <name>: Ollama model to use (default: llama3.2)
+- --device <id-or-name>: Input device to record from (default: the system default)
+- --list-devices: List the available input devices and exit
+- --file <path>: Answer one question recorded in an audio file, then exit
+- --denoise: Reduce background noise before transcription
+- --debug: Save each recording to debug-capture.wav in the current directory
+- --help, -h: Show this help message
+- --version, -v: Show version number
+
+## Answering from a file
+
+voxagent --file question.wav answers the question recorded in question.wav, then exits. The file can be WAV, AIFF, AIFF-C or FLAC. Without --file, voxagent needs an interactive terminal. With it, voxagent needs no microphone and no key presses. The exit code is 0 when the answer was printed, 1 when the file could not be read, held no speech, or could not be answered, and 2 when the command line was not valid.
+
+## Privacy and the network
+
+- Your audio is held in memory and passed to whisper.cpp in a process voxagent starts on your machine. No audio file is written, except with --debug.
+- Your question is sent to the Ollama server at 127.0.0.1:11434, which answers it with the model you chose. With an Ollama cloud model, Ollama sends the question to its cloud service.
+- The whisper model is downloaded once, about 150 MB, from the ggerganov/whisper.cpp repository on Hugging Face at a fixed revision, and checked against its SHA-256. It is stored in .voxagent/models in your home directory, and downloaded again only if that file is missing or has the wrong size.
+- With --debug, each recording is saved to debug-capture.wav in the current directory, replacing the previous one. The file stays until you delete it.
+- Apart from the model download, voxagent connects only to the Ollama server on your machine, and it needs no API key or account.
+
+## Keeping the model loaded
+
+Ollama keeps a model in memory for 5 minutes by default, and OLLAMA_KEEP_ALIVE, set when the Ollama server starts, changes that time, as the Ollama FAQ describes: https://docs.ollama.com/faq#how-do-i-keep-a-model-loaded-in-memory-or-make-it-unload-immediately
 
 ## Links
 
@@ -40,6 +66,6 @@ Every step runs on your machine. No cloud, no API keys, no network calls.
 - GitHub: https://github.com/analyticsinmotion/voxagent
 - npm: https://www.npmjs.com/package/voxagent
 
-## License
+## Licence
 
 Apache 2.0 - Analytics in Motion
