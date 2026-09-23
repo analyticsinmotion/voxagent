@@ -22,6 +22,7 @@ const OPTIONS = {
   model: { type: 'string' },
   device: { type: 'string' },
   'list-devices': { type: 'boolean' },
+  file: { type: 'string' },
   denoise: { type: 'boolean' },
   debug: { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
@@ -37,6 +38,7 @@ Options:
   --model <name>            Ollama model to use (default: ${DEFAULT_MODEL})
   --device <id-or-name>     Input device to record from (default: the system default)
   --list-devices            List the available input devices and exit
+  --file <path>             Answer one question recorded in an audio file, then exit
   --denoise                 Reduce background noise before transcription
   --debug                   Save each recording to debug-capture.wav in the current directory
   --help, -h                Show this help message
@@ -102,28 +104,52 @@ function parseCommandLine(argv) {
     process.exit(0);
   }
 
-  return {
+  const settings = {
     model: requireValue(values, 'model') || DEFAULT_MODEL,
     device: requireValue(values, 'device'),
+    file: requireValue(values, 'file'),
     listDevices: values['list-devices'] === true,
     denoise: values.denoise === true,
     debug: values.debug === true,
   };
+
+  // --file reads its audio from the file and never opens a microphone, so a device
+  // given alongside it would be ignored in silence.
+  if (settings.file !== undefined && settings.device !== undefined) {
+    usageError("Options '--file' and '--device' cannot be combined.");
+  }
+
+  return settings;
 }
 
 // Native modules
 
 // The whisper addon resolves its binary as <package>/dist/<platform>-<arch>/whisper.node
 // from the values process.platform and process.arch report, and it does that while it is
-// being required. These are the pairs it ships a binary for under a name that resolution
-// can reach. require.resolve locates the package without running it.
+// being required. It ships its macOS binaries under dist/mac-<arch> instead, a name that
+// resolution never reaches, so on macOS on Apple Silicon lib/stt.js loads
+// dist/mac-arm64/whisper.node itself. macOS on Intel is never supported: decibri ships no
+// binary for it, and the addon's mac-x64 directory holds the same arm64 binaries as
+// mac-arm64. Returns where the binary for a pair is loaded from, or null.
+function whisperBinary(dist, platform, arch) {
+  if (platform === 'darwin') {
+    return arch === 'arm64' ? path.join(dist, 'mac-arm64', 'whisper.node') : null;
+  }
+
+  return path.join(dist, `${platform}-${arch}`, 'whisper.node');
+}
+
+// The pairs with a binary at the path their loader uses. require.resolve locates the
+// package without running it.
 function whisperTargets() {
   const dist = path.join(path.dirname(require.resolve(WHISPER_PACKAGE)), '..');
   const targets = [];
 
   for (const platform of ['darwin', 'linux', 'win32']) {
     for (const arch of ['arm64', 'x64']) {
-      if (fs.existsSync(path.join(dist, `${platform}-${arch}`, 'whisper.node'))) {
+      const binary = whisperBinary(dist, platform, arch);
+
+      if (binary && fs.existsSync(binary)) {
         targets.push(`${platform}-${arch}`);
       }
     }
@@ -314,37 +340,13 @@ function resolveRequestedDevice(selector) {
   return matches[0];
 }
 
-// Main
-
-async function main() {
-  const { model, device, listDevices, denoise, debug } = parseCommandLine(process.argv);
-
-  if (listDevices) {
-    printDevices();
-    return;
-  }
-
-  // voxagent is driven by single key presses, which needs a terminal. With input
-  // redirected or piped there is no press to wait for, so this stops here rather than
-  // running the whole startup and then ending without saying why.
-  if (!process.stdin.isTTY) {
-    printError('voxagent needs an interactive terminal.');
-    print('Run it in a terminal rather than with input redirected or piped.');
-    process.exit(1);
-  }
-
-  registerCleanup();
-
-  printBanner(VERSION);
-
-  // The device is resolved first, so that a selector naming no device, or more than one,
-  // fails before any model is checked or loaded.
-  let selectedDevice;
-  if (device !== undefined) {
-    selectedDevice = resolveRequestedDevice(device);
-    printStatus(`Recording from ${selectedDevice.name}.`);
-  }
-
+// Startup
+//
+// Everything from the Ollama check onward, shared by the interactive loop and --file.
+// The language model is confirmed installed and then loaded, and the whisper model is
+// checked and then loaded in the transcription child. Returns the whisper model path,
+// and exits 1 on any failure.
+async function prepareModels(model, debug) {
   // Preflight: check Ollama
   printStatus('Checking Ollama connection...');
   if (!(await checkConnection())) {
@@ -401,6 +403,102 @@ async function main() {
     process.exit(1);
   }
   printStatus('Whisper model ready.');
+
+  return modelPath;
+}
+
+// --file
+
+// Answers the question recorded in an audio file, then exits: 0 once the answer is
+// printed, and 1 when the file cannot be read, holds no speech or cannot be answered.
+// The file is read before any model is checked or loaded, so a file that cannot be used
+// fails at once.
+async function answerFile(file, model, denoise, debug) {
+  const reader = loadCapture();
+  let result;
+
+  try {
+    result = await reader.readFile(file, { denoise });
+  } catch (err) {
+    printError(reader.fileErrorMessage(file, err));
+    process.exit(1);
+  }
+
+  const durationSec = (result.audio.length / 2 / reader.SAMPLE_RATE).toFixed(1);
+  printStatus(`Read ${durationSec}s of audio (${result.audio.length} bytes) from ${file}`);
+
+  // A file in which the detector heard no speech is never transcribed, exactly as a
+  // recording is not.
+  if (!result.speechDetected) {
+    print('No speech detected.');
+    process.exit(1);
+  }
+
+  const modelPath = await prepareModels(model, debug);
+
+  try {
+    printStatus('Transcribing...');
+    const text = await whisperHost.transcribe(result.audio, modelPath, debug);
+
+    if (!text || !text.trim()) {
+      print('No speech detected.');
+      process.exit(1);
+    }
+
+    printTranscript(text);
+
+    printStatus('\nThinking...');
+    const response = await ask(text, model);
+    printResponse(response);
+  } catch (err) {
+    printError(err.message);
+    process.exit(1);
+  }
+
+  process.exit(0);
+}
+
+// Main
+
+async function main() {
+  const { model, device, file, listDevices, denoise, debug } = parseCommandLine(process.argv);
+
+  if (listDevices) {
+    printDevices();
+    return;
+  }
+
+  // An audio file needs no key presses, so --file runs whether or not input comes
+  // from a terminal.
+  if (file !== undefined) {
+    registerCleanup();
+    printBanner(VERSION);
+    await answerFile(file, model, denoise, debug);
+    return;
+  }
+
+  // voxagent is driven by single key presses, which needs a terminal. With input
+  // redirected or piped there is no press to wait for, so this stops here rather than
+  // running the whole startup and then ending without saying why.
+  if (!process.stdin.isTTY) {
+    printError('voxagent needs an interactive terminal.');
+    print('Run it in a terminal rather than with input redirected or piped.');
+    process.exit(1);
+  }
+
+  registerCleanup();
+
+  printBanner(VERSION);
+
+  // The device is resolved first, so that a selector naming no device, or more than one,
+  // fails before any model is checked or loaded.
+  let selectedDevice;
+  if (device !== undefined) {
+    selectedDevice = resolveRequestedDevice(device);
+    printStatus(`Recording from ${selectedDevice.name}.`);
+  }
+
+  const modelPath = await prepareModels(model, debug);
 
   const recorder = loadCapture();
 

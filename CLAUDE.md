@@ -22,6 +22,8 @@ The code is CommonJS JavaScript with no build step. The supported Node versions 
 | Install | `npm ci` |
 | Run | `npm start` or `node bin/voxagent.js` |
 | Check the published file list | `npm pack --dry-run` |
+| Unit tests | `npm test` |
+| Integration tests | `$env:VOXAGENT_INTEGRATION = 'all'; $env:VOXAGENT_OLLAMA_MODEL = 'llama3.2'; npm run test:integration`. `VOXAGENT_INTEGRATION` takes `all` or a comma-separated list of `transcription`, `network` and `pipeline`, and `pipeline` also needs `VOXAGENT_OLLAMA_MODEL` to name an installed Ollama model |
 
 ## Git
 

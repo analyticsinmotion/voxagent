@@ -7,7 +7,8 @@
   },
   "scripts": {
     "start": "node bin/voxagent.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/unit/arguments.test.js test/unit/capture.test.js test/unit/decibri-interface.test.js test/unit/download.test.js test/unit/exit-paths.test.js test/unit/file.test.js test/unit/packaging.test.js test/unit/startup.test.js test/unit/stt.test.js test/unit/whisper.test.js",
+    "test:integration": "node --test test/integration/file.test.js test/integration/network.test.js test/integration/pipeline.test.js test/integration/transcription.test.js"
   },
   "keywords": [
     "voice",

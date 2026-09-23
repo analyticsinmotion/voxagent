@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - development
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+        node:
+          - 20
+          - 22
+          - 24
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the unit tests
+        run: npm test
+
+  transcription:
+    name: Transcription tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read the pinned SHA-256 of the whisper model
+        id: model
+        run: echo "sha256=$(node -p "require('./lib/model').MODEL_SHA256")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the whisper model
+        id: model-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.voxagent/models
+          key: whisper-model-${{ steps.model.outputs.sha256 }}
+
+      # The download checks the size and the SHA-256 of what it receives, and is
+      # saved before the tests run so that a failing test does not lose it.
+      - name: Download the whisper model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          node -e "require('./lib/model').ensureModel().catch((err) => { console.error(err.message); process.exit(1); })"
+
+      - name: Save the whisper model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.voxagent/models
+          key: whisper-model-${{ steps.model.outputs.sha256 }}
+
+      - name: Run the transcription and network integration tests
+        run: npm run test:integration
+        env:
+          VOXAGENT_INTEGRATION: transcription,network
+
+  pipeline:
+    name: Pipeline test (ubuntu-latest, Ollama)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OLLAMA_VERSION: 0.34.3
+      VOXAGENT_OLLAMA_MODEL: gemma3:270m
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read the pinned SHA-256 of the whisper model
+        id: model
+        run: echo "sha256=$(node -p "require('./lib/model').MODEL_SHA256")" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the whisper model
+        id: model-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.voxagent/models
+          key: whisper-model-${{ steps.model.outputs.sha256 }}
+
+      - name: Download the whisper model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          node -e "require('./lib/model').ensureModel().catch((err) => { console.error(err.message); process.exit(1); })"
+
+      - name: Save the whisper model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.voxagent/models
+          key: whisper-model-${{ steps.model.outputs.sha256 }}
+
+      # The install script downloads the release OLLAMA_VERSION names.
+      - name: Install Ollama ${{ env.OLLAMA_VERSION }}
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      # The install script starts Ollama as a system service under its own user,
+      # which keeps models outside this user's home. Ollama is run as this user
+      # instead, so its models are in ~/.ollama/models, where the cache can reach.
+      - name: Stop the Ollama service the install script started
+        run: |
+          if systemctl is-active --quiet ollama; then
+            sudo systemctl disable --now ollama
+          fi
+
+      - name: Restore the Ollama model
+        id: ollama-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ollama/models
+          key: ollama-model-${{ env.VOXAGENT_OLLAMA_MODEL }}
+
+      - name: Start Ollama and wait until it answers
+        run: |
+          nohup ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/version; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/ollama.log"
+          exit 1
+
+      - name: Pull ${{ env.VOXAGENT_OLLAMA_MODEL }}
+        run: ollama pull "$VOXAGENT_OLLAMA_MODEL"
+
+      - name: Save the Ollama model
+        if: steps.ollama-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ollama/models
+          key: ollama-model-${{ env.VOXAGENT_OLLAMA_MODEL }}
+
+      - name: Run the pipeline integration test
+        run: npm run test:integration
+        env:
+          VOXAGENT_INTEGRATION: pipeline
