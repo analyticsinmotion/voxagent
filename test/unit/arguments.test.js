@@ -60,6 +60,10 @@ describe('declared options and the usage text', () => {
     }
   });
 
+  it('describes voxagent in one line after the usage line', () => {
+    assert.strictEqual(cli.USAGE.trim().split('\n')[2], 'Voice-powered terminal agent.');
+  });
+
   it('describes --file as answering one question recorded in an audio file, then exiting', () => {
     const line = cli.USAGE.split('\n').find((text) => text.trimStart().startsWith('--file'));
     assert.strictEqual(line, '  --file <path>             Answer one question recorded in an audio file, then exit');

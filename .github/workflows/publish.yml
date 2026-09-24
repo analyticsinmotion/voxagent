@@ -5,29 +5,97 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
+# Every job states the permissions it needs, and nothing is granted at the workflow level.
+permissions: {}
 
+# No concurrency group is set here. ci.yml builds its group from github.workflow and
+# github.ref, which in a called workflow are this workflow's, so the same group here
+# would cancel this run when CI starts.
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  verify:
+    name: Verify the release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
+      # A fetch depth of 0 fetches every branch into refs/remotes/origin and every tag,
+      # which the check needs to find origin/main.
+      - name: Check out the repository with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          fetch-depth: 0
+          persist-credentials: false
 
-      - run: npm publish --access public
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Check that the tag names the package version and its commit is on main
+        run: node .github/scripts/verify-release.js "$TAG" "$COMMIT"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
 
-      - name: Create GitHub Release
+  ci:
+    name: CI
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish to npm
+    needs:
+      - verify
+      - ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # id-token: write lets npm exchange the job's OIDC token for a publish token through
+    # trusted publishing, so no npm token is stored anywhere.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Trusted publishing needs npm 11.5.1 or later. Node.js 24.5.0 is the first Node.js
+      # 24 release that bundles it.
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '>=24.5.0 <25'
+          package-manager-cache: false
+
+      - name: Show the Node.js and npm versions
         run: |
-          gh release create ${{ github.ref_name }} \
-            --title "${{ github.ref_name }}" \
-            --notes "Release ${{ github.ref_name }}" \
-            --repo ${{ github.repository }}
+          node --version
+          npm --version
+
+      # No dependency declares an install script, and none is run in a job that can
+      # obtain a publish token.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Publish with provenance through trusted publishing
+        run: npm publish --provenance
+
+  release:
+    name: Create the GitHub Release
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create the GitHub Release for the tag
+        run: gh release create "$TAG" --repo "$REPOSITORY" --verify-tag --title "$TAG" --notes "Release $TAG"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}

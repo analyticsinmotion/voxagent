@@ -2,8 +2,8 @@
 
 // Checks what voxagent confirms before it starts: the Ollama model match, the one
 // Ollama client, the platforms the whisper addon can load on, the missing Visual
-// C++ runtime check, the missing Linux system library check, and the supported Node
-// range and dependency versions.
+// C++ runtime check, the missing Linux system library check for decibri and the
+// whisper addon, and the supported Node range and dependency versions.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -12,8 +12,9 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 
-const { BIN, REPO, lib } = require('../helpers/repo');
+const { BIN, REPO, lib, helper } = require('../helpers/repo');
 const { runNode, describeRun } = require('../helpers/run');
+const { decibriLoadError } = require('../helpers/fakes');
 const { stubModule, forget, resolveFrom, whisperDist } = require('../helpers/modules');
 const { listen, close, ollamaServer } = require('../helpers/servers');
 const { satisfies } = require('../helpers/versions');
@@ -188,6 +189,10 @@ describe('the missing Linux system library check', { timeout: 120000 }, () => {
     assert.deepStrictEqual(cli.missingLinuxLibrary(loadError('libgomp.so.1')), { name: 'libgomp.so.1', description: 'the GNU OpenMP runtime', pkg: 'libgomp1' });
   });
 
+  it('names the ALSA library with its package when decibri cannot load, through the cause chain its loader builds', () => {
+    assert.deepStrictEqual(cli.missingLinuxLibrary(decibriLoadError('libasound.so.2')), { name: 'libasound.so.2', description: 'the ALSA library', pkg: 'libasound2t64' });
+  });
+
   it('finds the library inside a wrapping error, through the cause chain', () => {
     const outer = new Error('Cannot load the addon.', { cause: loadError('libvulkan.so.1') });
     assert.strictEqual(cli.missingLinuxLibrary(outer).name, 'libvulkan.so.1');
@@ -239,6 +244,32 @@ describe('the missing Linux system library check', { timeout: 120000 }, () => {
       assert.strictEqual(run.status, 1, describeRun(run));
       assert.deepStrictEqual(run.lines, [`Error: ${loadError(name).message}`]);
     }
+  });
+
+  // Runs voxagent --list-devices, which loads decibri first, on Linux x64 with decibri
+  // failing to load because the named library is missing.
+  const listDevicesWithout = (name) => runNode([BIN, '--list-devices'], {
+    preload: [helper('decibri-load-failure')],
+    env: { VOXAGENT_TEST_MISSING_LIBRARY: name },
+    cwd: REPO,
+  });
+
+  it('exits 1 on Linux naming the missing ALSA library and how to install it when decibri cannot load', async () => {
+    const run = await listDevicesWithout('libasound.so.2');
+
+    assert.strictEqual(run.status, 1, describeRun(run));
+    assert.deepStrictEqual(run.lines, [
+      'Error: A native module could not load because a library it needs is missing.',
+      'voxagent needs the ALSA library, libasound.so.2, on Linux.',
+      'On Debian and Ubuntu, install it with: sudo apt install libasound2t64',
+    ]);
+  });
+
+  it('exits 1 with the message decibri gives when the library it cannot find is not a known system library', async () => {
+    const run = await listDevicesWithout('libunknown.so.1');
+
+    assert.strictEqual(run.status, 1, describeRun(run));
+    assert.deepStrictEqual(run.lines, [`Error: ${decibriLoadError('libunknown.so.1').message}`]);
   });
 });
 

@@ -4,7 +4,9 @@
 // the whisper model and the transcription child, and checks --file end to end: a
 // file with speech is answered, a file with no speech or one that cannot be read
 // stops before any model is loaded, and --file needs no terminal. Also checks that
-// the interactive loop sends a recording to whisper only when speech was detected.
+// the interactive loop sends a recording to whisper only when speech was detected, and
+// that a platform the whisper addon has no binary for stops both before any of the
+// stand-ins is used.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -162,5 +164,57 @@ describe('the interactive loop', { timeout: 120000 }, () => {
     assert.ok(run.lines.includes(ANSWER), describeRun(run));
     assert.strictEqual(events.find((entry) => entry.event === 'whisper.transcribe').bytes, 12 * 3200);
     assert.deepStrictEqual(events.find((entry) => entry.event === 'microphone.open').options, MICROPHONE_OPTIONS);
+  });
+});
+
+describe('an unsupported platform', { timeout: 120000 }, () => {
+  const refusal = (platform, arch) => [
+    `Error: voxagent does not support ${platform} on ${arch}.`,
+    'Supported platforms: darwin-arm64, linux-x64, win32-x64.',
+  ];
+
+  // Every stand-in logs each call it receives, so an empty log apart from the exit shows
+  // that Ollama was never asked, the whisper model was never checked or downloaded, no
+  // audio file was opened, whisper was never started and the terminal was never used.
+  const used = (names) => names.filter((name) => name !== 'exit');
+
+  it('stops the interactive loop with exit 1 before Ollama, the whisper model or the terminal is used', async () => {
+    const { run, names } = await runInWorld([], {
+      platform: { platform: 'darwin', arch: 'x64' },
+      microphone: { speech: true },
+      keys: ['enter', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 1, describeRun(run));
+    assert.deepStrictEqual(run.lines, refusal('darwin', 'x64'));
+    assert.deepStrictEqual(used(names), []);
+  });
+
+  it('stops --file with exit 1 before the file is read or Ollama or the whisper model is used', async () => {
+    const { run, names } = await runInWorld(['--file', 'question.wav'], {
+      platform: { platform: 'linux', arch: 'arm64' },
+      file: { speech: true, bytes: 84000 },
+    });
+
+    assert.strictEqual(run.status, 1, describeRun(run));
+    assert.deepStrictEqual(run.lines, refusal('linux', 'arm64'));
+    assert.deepStrictEqual(used(names), []);
+  });
+
+  it('still prints the version and lists the input devices', async () => {
+    const platform = { platform: 'darwin', arch: 'x64' };
+    const devices = [{ id: 'input-1', name: 'Input One', maxInputChannels: 1, defaultSampleRate: 48000, isDefault: true }];
+
+    const version = await runInWorld(['--version'], { platform });
+    assert.strictEqual(version.run.status, 0, describeRun(version.run));
+    assert.deepStrictEqual(version.run.lines, [JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version]);
+
+    const listing = await runInWorld(['--list-devices'], { platform, devices });
+    assert.strictEqual(listing.run.status, 0, describeRun(listing.run));
+    assert.deepStrictEqual(listing.run.lines, [
+      '* Input One (1 channels, 48000 Hz)',
+      '    input-1',
+      'The device marked * is the system default. Pass a name or an id to --device.',
+    ]);
   });
 });

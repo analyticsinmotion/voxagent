@@ -14,6 +14,7 @@
 //   whisper     { text }
 //   keys        with a value, input looks like a terminal, and each key is pressed
 //               when voxagent next asks for one: "enter", "ctrl-c" or "none"
+//   platform    { platform, arch } for process.platform and process.arch to report
 
 const { EventEmitter } = require('events');
 const fs = require('fs');
@@ -192,6 +193,18 @@ stubModule(path.join(LIB, 'whisper.js'), {
     };
   },
 });
+
+// The platform
+
+// The standard streams are created before process.platform changes, because Node
+// creates each on first use and chooses from the platform whether a pipe is written
+// synchronously, and output written asynchronously is lost when the process exits.
+if (world.platform) {
+  process.stdout;
+  process.stderr;
+  Object.defineProperty(process, 'platform', { value: world.platform.platform });
+  Object.defineProperty(process, 'arch', { value: world.platform.arch });
+}
 
 // A terminal
 

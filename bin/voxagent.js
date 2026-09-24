@@ -16,9 +16,10 @@ const VC_REDIST_URL = {
   x64: 'https://aka.ms/vs/17/release/vc_redist.x64.exe',
 };
 
-// System libraries the whisper addon's Linux build needs and does not ship, with the
-// Debian and Ubuntu package that provides each.
+// System libraries that the Linux builds of decibri and the whisper addon need and do not
+// ship, with the Debian and Ubuntu package that provides each.
 const LINUX_SYSTEM_LIBRARIES = {
+  'libasound.so.2': { description: 'the ALSA library', pkg: 'libasound2t64' },
   'libgomp.so.1': { description: 'the GNU OpenMP runtime', pkg: 'libgomp1' },
   'libvulkan.so.1': { description: 'the Vulkan loader', pkg: 'libvulkan1' },
 };
@@ -37,7 +38,7 @@ const OPTIONS = {
 const USAGE = `
 Usage: voxagent [options]
 
-Voice-powered terminal agent. Fully offline.
+Voice-powered terminal agent.
 
 Options:
   --model <name>            Ollama model to use (default: ${DEFAULT_MODEL})
@@ -250,8 +251,6 @@ function loadCapture() {
 // can hide them. The child reports a whisper addon it cannot load rather than crashing
 // without an explanation.
 async function startWhisper(debug) {
-  checkWhisperPlatform(process.platform, process.arch);
-
   const whisper = require('../lib/whisper').start({ debug });
 
   try {
@@ -483,6 +482,11 @@ async function main() {
     printDevices();
     return;
   }
+
+  // Both the interactive loop and --file transcribe with the whisper addon, so a platform
+  // it has no binary for stops here, before any audio file is read, Ollama is contacted
+  // or the whisper model is downloaded.
+  checkWhisperPlatform(process.platform, process.arch);
 
   // An audio file needs no key presses, so --file runs whether or not input comes
   // from a terminal.

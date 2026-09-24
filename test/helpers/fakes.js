@@ -1,8 +1,9 @@
 'use strict';
 
 // Stand-ins used in the test process itself: the native whisper function, a
-// decibri stream, a terminal on standard input, and a filter that keeps
-// lib/model.js's download lines out of the test output.
+// decibri stream, a terminal on standard input, a filter that keeps
+// lib/model.js's download lines out of the test output, and the error decibri's
+// loader throws when it cannot load.
 
 const { EventEmitter } = require('events');
 const fs = require('fs');
@@ -148,4 +149,20 @@ function captureModelOutput() {
   };
 }
 
-module.exports = { fakeWhisper, fakeStream, fakeEngine, installFakeStdin, captureModelOutput };
+// The error decibri's loader throws on Linux x64 when the dynamic loader cannot find the
+// named library. The loader tries the binary beside itself and then its platform
+// package, and chains the failed attempts through cause, the last attempt first, under
+// one outer error.
+function decibriLoadError(name) {
+  const attempts = [
+    Object.assign(new Error("Cannot find module './decibri.linux-x64-gnu.node'"), { code: 'MODULE_NOT_FOUND' }),
+    Object.assign(new Error(`${name}: cannot open shared object file: No such file or directory`), { code: 'ERR_DLOPEN_FAILED' }),
+  ];
+
+  return new Error(
+    'Cannot find native binding. npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). Please try `npm i` again after removing both package-lock.json and node_modules directory.',
+    { cause: attempts.reduce((err, cur) => Object.assign(cur, { cause: err })) },
+  );
+}
+
+module.exports = { fakeWhisper, fakeStream, fakeEngine, installFakeStdin, captureModelOutput, decibriLoadError };
