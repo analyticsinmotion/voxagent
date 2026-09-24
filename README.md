@@ -38,7 +38,7 @@ voxagent
 
 ```text
 
-voxagent v0.1.0 - voice-powered terminal
+voxagent v0.2.0 - voice-powered terminal
 
 Checking Ollama connection...
 Ollama connected.
@@ -50,7 +50,7 @@ Whisper model ready.
 
 Press ENTER to speak, or Ctrl+C to quit.
 Recording. It stops when you stop speaking, or press ENTER to stop now.
-Captured 4.6s of audio (147944 bytes)
+Captured 4.7s of audio (150824 bytes)
 Transcribing...
 
 You: What is the capital of Australia?
@@ -61,14 +61,14 @@ The capital of Australia is Canberra.
 
 Press ENTER to speak, or Ctrl+C to quit.
 Recording. It stops when you stop speaking, or press ENTER to stop now.
-Captured 4.6s of audio (148584 bytes)
+Captured 5.1s of audio (163624 bytes)
 Transcribing...
 
 You: How many days in a leap year?
 
 Thinking...
 
-In a leap year, there are 366 days. This is because an extra day is added to the month of February, making it a 29-day month instead of the usual 28 days.
+There are 366 days in a leap year.
 
 Press ENTER to speak, or Ctrl+C to quit.
 
@@ -133,7 +133,7 @@ voxagent --file question.wav
 
 ```text
 
-voxagent v0.1.0 - voice-powered terminal
+voxagent v0.2.0 - voice-powered terminal
 
 Read 2.6s of audio (84000 bytes) from question.wav
 Checking Ollama connection...
