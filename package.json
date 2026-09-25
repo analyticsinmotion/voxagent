@@ -1,13 +1,14 @@
 {
   "name": "voxagent",
-  "version": "0.1.0",
-  "description": "Voice-powered terminal agent. Fully offline. Speak commands, get answers.",
+  "version": "0.2.0",
+  "description": "Voice-powered terminal agent. Ask questions out loud and get answers from a local model in Ollama.",
   "bin": {
     "voxagent": "./bin/voxagent.js"
   },
   "scripts": {
     "start": "node bin/voxagent.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/unit/arguments.test.js test/unit/capture.test.js test/unit/decibri-interface.test.js test/unit/download.test.js test/unit/exit-paths.test.js test/unit/file.test.js test/unit/packaging.test.js test/unit/startup.test.js test/unit/stt.test.js test/unit/whisper.test.js",
+    "test:integration": "node --test test/integration/file.test.js test/integration/network.test.js test/integration/pipeline.test.js test/integration/transcription.test.js"
   },
   "keywords": [
     "voice",
@@ -40,11 +41,11 @@
   },
   "homepage": "https://voxagent.run",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^18.3.0 || ^20 || >=21"
   },
   "dependencies": {
-    "decibri": "^1.0.0",
     "@kutalia/whisper-node-addon": "^1.0.0",
+    "decibri": "^5.7.0",
     "ollama": "^0.5.0"
   }
 }

@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>voxagent — Voice-powered terminal agent</title>
-  <meta name="description" content="Fully offline voice agent for your terminal. Speak commands, get answers. Powered by decibri, whisper.cpp, and Ollama. No cloud, no API keys.">
+  <title>voxagent - Voice-powered terminal agent</title>
+  <meta name="description" content="Voice agent for your terminal. Ask questions out loud, get answers from a local model in Ollama. Powered by decibri, whisper.cpp, and Ollama. No API keys.">
   <meta property="og:title" content="voxagent - Voice-powered terminal agent">
-  <meta property="og:description" content="Speak commands, get answers. Fully offline. Nothing leaves your machine.">
+  <meta property="og:description" content="Ask questions out loud, get answers. Your audio and your questions never leave your machine.">
   <meta property="og:image" content="https://voxagent.run/assets/voxagent-og-image.png">
   <meta property="og:url" content="https://voxagent.run">
   <meta property="og:type" content="website">
@@ -544,13 +544,13 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "voxagent",
-    "description": "Voice-powered terminal agent. Fully offline. Speak commands, get answers.",
+    "description": "Voice-powered terminal agent. Ask questions out loud, get answers from a local model in Ollama.",
     "applicationCategory": "DeveloperApplication",
-    "operatingSystem": "Windows, macOS, Linux",
+    "operatingSystem": "Windows x64, macOS 14 or later on Apple Silicon, Linux x64 with glibc 2.38 or later",
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
     "url": "https://voxagent.run",
     "downloadUrl": "https://www.npmjs.com/package/voxagent",
-    "softwareVersion": "0.1.0",
+    "softwareVersion": "0.2.0",
     "license": "https://opensource.org/licenses/Apache-2.0",
     "author": { "@type": "Organization", "name": "Analytics in Motion", "url": "https://analyticsinmotion.com" }
   }
@@ -579,7 +579,7 @@
   <div class="hero">
     <div class="container">
       <h1>vox<span class="accent">agent</span></h1>
-      <p class="subtitle">Voice-powered terminal agent. Speak commands, get answers. Nothing leaves your machine.</p>
+      <p class="subtitle">Voice-powered terminal agent. Ask questions out loud, get answers. Your audio and your questions never leave your machine.</p>
       <div class="install-row">
         <div class="install-cmd" onclick="copyInstall(this)">
           <span class="dollar">$</span>
@@ -605,21 +605,40 @@
         <div class="terminal-body">
           <div><span class="prompt">$</span> <span class="cmd">voxagent</span></div>
           <div class="blank"></div>
-          <div><span class="dim">voxagent v0.1.0 — voice-powered terminal</span></div>
-          <div><span class="dim">Ollama connected. Model: llama3.2</span></div>
+          <div><span class="dim">voxagent v0.2.0 - voice-powered terminal</span></div>
+          <div class="blank"></div>
+          <div><span class="dim">Checking Ollama connection...</span></div>
+          <div><span class="dim">Ollama connected.</span></div>
+          <div><span class="dim">Loading llama3.2...</span></div>
+          <div><span class="dim">llama3.2 ready.</span></div>
+          <div><span class="dim">Checking whisper model...</span></div>
+          <div><span class="dim">Loading whisper model...</span></div>
           <div><span class="dim">Whisper model ready.</span></div>
           <div class="blank"></div>
-          <div>Press ENTER to speak...</div>
-          <div><span class="dim">[Recording...]</span> Press ENTER to stop.</div>
-          <div class="blank"></div>
+          <div>Press ENTER to speak, or Ctrl+C to quit.</div>
+          <div>Recording. It stops when you stop speaking, or press ENTER to stop now.</div>
+          <div><span class="dim">Captured 4.7s of audio (150824 bytes)</span></div>
           <div><span class="dim">Transcribing...</span></div>
-          <div><span class="user">You:</span> What's the default port for PostgreSQL?</div>
+          <div class="blank"></div>
+          <div><span class="user">You:</span> What is the capital of Australia?</div>
           <div class="blank"></div>
           <div><span class="dim">Thinking...</span></div>
-          <div class="response">PostgreSQL runs on port 5432 by default. This is the standard</div>
-          <div class="response">port configured in postgresql.conf under the "port" setting.</div>
           <div class="blank"></div>
-          <div>Press ENTER to speak...</div>
+          <div class="response">The capital of Australia is Canberra.</div>
+          <div class="blank"></div>
+          <div>Press ENTER to speak, or Ctrl+C to quit.</div>
+          <div>Recording. It stops when you stop speaking, or press ENTER to stop now.</div>
+          <div><span class="dim">Captured 5.1s of audio (163624 bytes)</span></div>
+          <div><span class="dim">Transcribing...</span></div>
+          <div class="blank"></div>
+          <div><span class="user">You:</span> How many days in a leap year?</div>
+          <div class="blank"></div>
+          <div><span class="dim">Thinking...</span></div>
+          <div class="blank"></div>
+          <div class="response">There are 366 days in a leap year.</div>
+          <div class="blank"></div>
+          <div>Press ENTER to speak, or Ctrl+C to quit.</div>
+          <div class="blank"></div>
         </div>
       </div>
     </div>
@@ -629,7 +648,7 @@
   <section>
     <div class="container">
       <h2>How it <span class="accent">works</span></h2>
-      <p class="section-sub">Three steps, all on your machine. No cloud, no API keys, no network calls.</p>
+      <p class="section-sub">Three steps, all on your machine. No API keys, and no network request apart from a one-time download of the speech model.</p>
       <div class="pipeline">
         <div class="pipeline-step">
           <div class="step-number">Step 01</div>
@@ -662,12 +681,12 @@
       <p class="section-sub">A voice interface that respects your machine, your data, and your workflow.</p>
       <div class="features-grid">
         <div class="feature-card">
-          <h3><span class="icon">⬡</span> Fully offline</h3>
-          <p>No cloud services. No API keys. No accounts. No recurring cost. Everything runs on your hardware.</p>
+          <h3><span class="icon">⬡</span> Runs locally</h3>
+          <p>Speech recognition and the language model run on your hardware. After a one-time download of the speech model, voxagent talks only to Ollama on your machine. No API keys. No accounts.</p>
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Cross-platform</h3>
-          <p>Windows, macOS, and Linux. Prebuilt native binaries via decibri handle platform differences.</p>
+          <p>Windows x64, macOS 14 or later on Apple Silicon, and Linux x64. Prebuilt native binaries, so nothing is compiled at install.</p>
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Any model</h3>
@@ -675,7 +694,7 @@
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Privacy first</h3>
-          <p>No audio is recorded, stored, or transmitted. Ever. Your voice stays on your machine.</p>
+          <p>Your audio is held in memory and passed straight to the speech engine on your machine. It is never sent anywhere, and never written to disk unless you turn on debug mode. Your questions go only to Ollama on your machine.</p>
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Open source</h3>
@@ -683,7 +702,7 @@
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Debug mode</h3>
-          <p>Run with <code>--debug</code> to see audio levels, capture duration, and raw whisper output.</p>
+          <p>Run with <code>--debug</code> to see audio levels and raw whisper output. It also saves each recording to debug-capture.wav in the current directory, which stays until you delete it.</p>
         </div>
       </div>
     </div>
@@ -711,13 +730,13 @@
   <section>
     <div class="container">
       <h2>Requirements</h2>
-      <p class="section-sub" style="margin-bottom:24px">Minimal setup. No cloud accounts.</p>
+      <p class="section-sub" style="margin-bottom:24px">Windows x64, macOS 14 or later on Apple Silicon, or Linux x64. No cloud accounts.</p>
       <div style="font-size:15px;color:var(--text-secondary);line-height:2.2">
-        <div>✓ &nbsp;Node.js 18+</div>
+        <div>✓ &nbsp;Node.js 18.3 or later, except Node.js 19</div>
         <div>✓ &nbsp;<a href="https://ollama.com" style="color:var(--accent);text-decoration:none">Ollama</a> running locally</div>
         <div>✓ &nbsp;A microphone</div>
         <div style="height:12px"></div>
-        <div style="color:var(--text-muted);font-size:13px">First run downloads a whisper model (~150 MB). Cached locally for future use.</div>
+        <div style="color:var(--text-muted);font-size:13px">On Windows, voxagent needs the <a href="https://aka.ms/vs/17/release/vc_redist.x64.exe" style="color:var(--accent);text-decoration:none">Microsoft Visual C++ Redistributable</a>. On Linux, it needs glibc 2.38 or later, such as Ubuntu 24.04 or Debian 13, and the packages libvulkan1, libgomp1 and libasound2t64. Intel Macs, and ARM64 on Windows and Linux, are not supported. The first run downloads the whisper model, about 150 MB, to .voxagent/models in your home directory.</div>
       </div>
     </div>
   </section>
@@ -728,13 +747,13 @@
       <h2>Powered <span class="accent">by</span></h2>
       <p class="section-sub">Built on proven open-source foundations.</p>
       <div class="powered-grid">
-        <a href="https://decibri.dev" class="powered-card" target="_blank" rel="noopener">
+        <a href="https://decibri.com" class="powered-card" target="_blank" rel="noopener">
           <h3>decibri</h3>
           <p>Cross-platform microphone capture for Node.js</p>
         </a>
         <a href="https://github.com/ggml-org/whisper.cpp" class="powered-card" target="_blank" rel="noopener">
           <h3>whisper.cpp</h3>
-          <p>Local speech-to-text by OpenAI Whisper</p>
+          <p>Local speech-to-text with the Whisper model from OpenAI</p>
         </a>
         <a href="https://ollama.com" class="powered-card" target="_blank" rel="noopener">
           <h3>Ollama</h3>
