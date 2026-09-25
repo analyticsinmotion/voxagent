@@ -52,6 +52,7 @@ jobs:
       - verify
       - ci
     runs-on: ubuntu-24.04
+    environment: npm
     timeout-minutes: 15
     # id-token: write lets npm exchange the job's OIDC token for a publish token through
     # trusted publishing, so no npm token is stored anywhere.
