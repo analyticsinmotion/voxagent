@@ -1,9 +1,9 @@
 'use strict';
 
-// Checks the ways voxagent can end. The microphone is released on every exit path
-// a Node process can run by itself: an emitted SIGINT, SIGTERM or SIGBREAK, an
-// uncaught exception, and a normal exit. Input that is not a terminal, without
-// --file, ends at once with a message and loads nothing.
+// Checks the ways voxagent can end. The microphone is released and the terminal taken
+// out of raw mode on every exit path a Node process can run by itself: an emitted
+// SIGINT, SIGTERM or SIGBREAK, an uncaught exception, and a normal exit. Input that is
+// not a terminal, without --file, ends at once with a message and loads nothing.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -24,7 +24,7 @@ after(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('releasing the microphone', { timeout: 120000 }, () => {
+describe('releasing the microphone and restoring the terminal', { timeout: 120000 }, () => {
   const paths = [
     ['an emitted SIGINT, which is how Ctrl+C arrives in raw mode', 'sigint', 0],
     ['an emitted SIGTERM', 'sigterm', 0],
@@ -34,12 +34,12 @@ describe('releasing the microphone', { timeout: 120000 }, () => {
   ];
 
   for (const [label, mode, code] of paths) {
-    it(`stops the open microphone on ${label}`, async () => {
+    it(`stops the open microphone and takes the terminal out of raw mode on ${label}`, async () => {
       const log = path.join(dir, `${mode}.log`);
       const run = await runNode([helper('cleanup-child'), mode, log], { cwd: REPO });
       const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
 
-      assert.deepStrictEqual(lines, [`trigger ${mode}`, 'stop'], describeRun(run));
+      assert.deepStrictEqual(lines, ['raw true', `trigger ${mode}`, 'stop', 'raw false'], describeRun(run));
       assert.strictEqual(run.status, code, describeRun(run));
     });
   }

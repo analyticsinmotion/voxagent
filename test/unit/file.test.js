@@ -3,9 +3,11 @@
 // Runs bin/voxagent.js from start to finish against stand-ins for decibri, Ollama,
 // the whisper model and the transcription child, and checks --file end to end: a
 // file with speech is answered, a file with no speech or one that cannot be read
-// stops before any model is loaded, and --file needs no terminal. Also checks that
-// the interactive loop sends a recording to whisper only when speech was detected, and
-// that a platform the whisper addon has no binary for stops both before any of the
+// stops before any model is loaded, and --file needs no terminal. Also checks the
+// interactive loop: a recording reaches whisper only when speech was detected, Ctrl+C
+// quits at every stage, a key pressed while voxagent answers is discarded, and with
+// --memory the conversation goes with each question and H and C show and clear it.
+// A platform the whisper addon has no binary for stops both before any of the
 // stand-ins is used.
 
 const { describe, it, before, after } = require('node:test');
@@ -14,8 +16,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { BIN, REPO, helper } = require('../helpers/repo');
+const { BIN, REPO, lib, helper } = require('../helpers/repo');
 const { runNode, describeRun } = require('../helpers/run');
+
+const { SYSTEM_MESSAGE } = require(lib('conversation'));
 
 const QUESTION = 'What is the capital of Australia?';
 const ANSWER = 'The capital of Australia is Canberra.';
@@ -143,6 +147,25 @@ describe('--file', { timeout: 120000 }, () => {
     assert.strictEqual(run.status, 0, describeRun(run));
     assert.deepStrictEqual(events.find((entry) => entry.event === 'file.open').options, { ...MICROPHONE_OPTIONS, denoise: 'fastenhancer-t' });
   });
+
+  it('asks the question on its own, with no system message, and reads no context length', async () => {
+    const { run, events, names } = await runInWorld(['--file', 'question.wav'], { file: { speech: true, bytes: 84000 } });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+
+    const chat = events.find((entry) => entry.event === 'ollama.chat');
+    assert.deepStrictEqual(chat.messages, [{ role: 'user', content: QUESTION }]);
+    assert.deepStrictEqual(chat.fields, ['messages', 'model']);
+    assert.ok(!names.includes('ollama.ps'), names.join(', '));
+  });
+
+  it('exits 2 with --memory before the file is read or any model is loaded', async () => {
+    const { run, names } = await runInWorld(['--file', 'question.wav', '--memory'], { file: { speech: true, bytes: 84000 } });
+
+    assert.strictEqual(run.status, 2, describeRun(run));
+    assert.deepStrictEqual(run.lines, ["Error: Options '--file' and '--memory' cannot be combined.", 'Run voxagent --help for usage.']);
+    assert.deepStrictEqual(names.filter((name) => name !== 'exit'), []);
+  });
 });
 
 describe('the interactive loop', { timeout: 120000 }, () => {
@@ -164,6 +187,242 @@ describe('the interactive loop', { timeout: 120000 }, () => {
     assert.ok(run.lines.includes(ANSWER), describeRun(run));
     assert.strictEqual(events.find((entry) => entry.event === 'whisper.transcribe').bytes, 12 * 3200);
     assert.deepStrictEqual(events.find((entry) => entry.event === 'microphone.open').options, MICROPHONE_OPTIONS);
+  });
+
+  it('discards a key pressed while voxagent answers, so the next prompt waits for a new press', async () => {
+    const { run, names } = await runInWorld([], {
+      microphone: { speech: true },
+      ollama: { models: ['llama3.2:latest'], answer: ANSWER, keyDuring: 'enter' },
+      keys: ['enter', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(run.lines.includes(ANSWER), describeRun(run));
+    assert.strictEqual(names.filter((name) => name === 'microphone.open').length, 1, names.join(', '));
+  });
+});
+
+describe('Ctrl+C', { timeout: 120000 }, () => {
+  // Each case ends through the interrupt handling: exit 0, the transcription child
+  // stopped, and the terminal put in raw mode once at startup and taken out of it once.
+  function endedByInterrupt({ run, events, names }) {
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(names.includes('whisper.stop'), names.join(', '));
+    assert.deepStrictEqual(events.filter((entry) => entry.event === 'terminal.raw').map((entry) => entry.on), [true, false]);
+  }
+
+  it('quits at the prompt', async () => {
+    const world = await runInWorld([], { microphone: { speech: true }, keys: ['ctrl-c'] });
+
+    endedByInterrupt(world);
+    assert.ok(!world.names.includes('microphone.open'), world.names.join(', '));
+  });
+
+  it('quits during a recording and releases the microphone', async () => {
+    const world = await runInWorld([], { microphone: { speech: false }, keys: ['enter', 'ctrl-c'] });
+
+    endedByInterrupt(world);
+    assert.ok(world.names.includes('microphone.stop'), world.names.join(', '));
+    assert.ok(!world.names.includes('whisper.transcribe'), world.names.join(', '));
+  });
+
+  it('quits during transcription', async () => {
+    const world = await runInWorld([], {
+      microphone: { speech: true },
+      whisper: { text: QUESTION, keyDuring: 'ctrl-c' },
+      keys: ['enter', 'none'],
+    });
+
+    endedByInterrupt(world);
+    assert.ok(world.names.includes('whisper.transcribe'), world.names.join(', '));
+    assert.ok(!world.names.includes('ollama.chat'), world.names.join(', '));
+  });
+
+  it('quits while voxagent waits for the answer', async () => {
+    const world = await runInWorld([], {
+      microphone: { speech: true },
+      ollama: { models: ['llama3.2:latest'], answer: ANSWER, keyDuring: 'ctrl-c' },
+      keys: ['enter', 'none'],
+    });
+
+    endedByInterrupt(world);
+    assert.ok(world.names.includes('ollama.chat'), world.names.join(', '));
+    assert.ok(!world.run.lines.includes(ANSWER), describeRun(world.run));
+  });
+});
+
+describe('the interactive loop with --memory', { timeout: 120000 }, () => {
+  const Q1 = 'What is the capital of Australia?';
+  const A1 = 'The capital of Australia is Canberra.';
+  const Q2 = 'How many people live there?';
+  const A2 = 'About 470,000 people live in Canberra.';
+  const Q3 = 'What is the tallest mountain?';
+  const A3 = 'Mount Everest is the tallest mountain.';
+
+  const SYSTEM = { role: 'system', content: SYSTEM_MESSAGE };
+  const user = (content) => ({ role: 'user', content });
+  const assistant = (content) => ({ role: 'assistant', content });
+
+  const chats = (events) => events.filter((entry) => entry.event === 'ollama.chat');
+  const count = (names, name) => names.filter((entry) => entry === name).length;
+
+  // Three questions, each recorded at an ENTER press and answered in turn.
+  const threeQuestions = {
+    microphone: { speech: true },
+    whisper: { texts: [Q1, Q2, Q3] },
+    keys: ['enter', 'none', 'enter', 'none', 'enter', 'none', 'ctrl-c'],
+  };
+
+  it('names H and C at the prompt, and sends the first exchange with the second question after the system message', async () => {
+    const { run, events } = await runInWorld(['--memory'], {
+      ...threeQuestions,
+      ollama: { models: ['llama3.2:latest'], answers: [A1, A2, A3] },
+      keys: ['enter', 'none', 'enter', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(run.lines.includes('Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.'), describeRun(run));
+    assert.ok(!run.lines.includes('Press ENTER to speak, or Ctrl+C to quit.'), describeRun(run));
+
+    const [first, second] = chats(events);
+
+    assert.deepStrictEqual(first.messages, [SYSTEM, user(Q1)]);
+    assert.deepStrictEqual(second.messages, [SYSTEM, user(Q1), assistant(A1), user(Q2)]);
+    assert.deepStrictEqual(second.fields, ['messages', 'model']);
+  });
+
+  it('reads the context length once, after the warm-up and before the whisper model is checked', async () => {
+    const { run, names } = await runInWorld(['--memory'], { microphone: { speech: true }, keys: ['ctrl-c'] });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.strictEqual(count(names, 'ollama.ps'), 1, names.join(', '));
+    assert.ok(names.indexOf('ollama.generate') < names.indexOf('ollama.ps'), names.join(', '));
+    assert.ok(names.indexOf('ollama.ps') < names.indexOf('model.ensure'), names.join(', '));
+  });
+
+  it('shows the conversation for H and starts no recording', async () => {
+    const { run, names } = await runInWorld(['--memory'], { microphone: { speech: true }, keys: ['enter', 'none', 'h', 'ctrl-c'] });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+
+    const at = run.lines.indexOf('The conversation holds 1 of up to 10 exchanges.');
+
+    assert.ok(at >= 0, describeRun(run));
+    assert.deepStrictEqual(run.lines.slice(at, at + 4), [
+      'The conversation holds 1 of up to 10 exchanges.',
+      `1. You: ${QUESTION}`,
+      `   ${ANSWER}`,
+      'Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.',
+    ]);
+    assert.strictEqual(count(names, 'microphone.open'), 1, names.join(', '));
+  });
+
+  it('clears the conversation for C, so the next request carries the system message and one question', async () => {
+    const { run, events, names } = await runInWorld(['--memory'], {
+      ...threeQuestions,
+      ollama: { models: ['llama3.2:latest'], answers: [A1, A2] },
+      keys: ['enter', 'none', 'c', 'h', 'enter', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(run.lines.includes('Conversation cleared.'), describeRun(run));
+    assert.ok(run.lines.includes('The conversation is empty.'), describeRun(run));
+    assert.deepStrictEqual(chats(events)[1].messages, [SYSTEM, user(Q2)]);
+    assert.strictEqual(count(names, 'microphone.open'), 2, names.join(', '));
+  });
+
+  it('leaves the conversation as it was when an answer fails or is empty', async () => {
+    const { run, events } = await runInWorld(['--memory'], {
+      microphone: { speech: true },
+      whisper: { texts: [Q1, Q2, Q3, 'And the longest river?'] },
+      ollama: { models: ['llama3.2:latest'], answers: [A1, { error: 'model runner has unexpectedly stopped' }, '', A3] },
+      keys: ['enter', 'none', 'enter', 'none', 'enter', 'none', 'enter', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(run.lines.includes('Error: model runner has unexpectedly stopped'), describeRun(run));
+
+    const sent = chats(events);
+
+    assert.deepStrictEqual(sent[2].messages, [SYSTEM, user(Q1), assistant(A1), user(Q3)]);
+    assert.deepStrictEqual(sent[3].messages, [SYSTEM, user(Q1), assistant(A1), user('And the longest river?')]);
+  });
+
+  it('keeps the number of exchanges --context sets, and reports the counts with --debug after each answer', async () => {
+    const counts = (prompt, cached, answer) => ({
+      prompt_eval_count: prompt,
+      prompt_eval_cached_count: cached,
+      eval_count: answer,
+      load_duration: 22000000,
+      prompt_eval_duration: 14000000,
+    });
+
+    const { run, events } = await runInWorld(['--memory', '--context', '1', '--debug'], {
+      ...threeQuestions,
+      ollama: {
+        models: ['llama3.2:latest'],
+        ps: [{ name: 'llama3.2:latest', model: 'llama3.2:latest', context_length: 16384 }],
+        answers: [{ text: A1, counts: counts(32, 23, 8) }, { text: A2, counts: counts(55, 39, 12) }, { text: A3, counts: counts(50, 0, 9) }],
+      },
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.deepStrictEqual(chats(events)[2].messages, [SYSTEM, user(Q2), assistant(A2), user(Q3)]);
+    assert.deepStrictEqual(run.lines.filter((line) => line.startsWith('[debug] prompt_eval_count')), [
+      '[debug] prompt_eval_count=32 prompt_eval_cached_count=23 eval_count=8 load_duration=22ms prompt_eval_duration=14ms context_length=16384 exchanges_held=1 removed_before_question=0',
+      '[debug] prompt_eval_count=55 prompt_eval_cached_count=39 eval_count=12 load_duration=22ms prompt_eval_duration=14ms context_length=16384 exchanges_held=1 removed_before_question=0',
+      '[debug] prompt_eval_count=50 prompt_eval_cached_count=0 eval_count=9 load_duration=22ms prompt_eval_duration=14ms context_length=16384 exchanges_held=1 removed_before_question=1',
+    ]);
+  });
+
+  it('uses a context length of 4096 for a model /api/ps does not list, and marks counts Ollama leaves out', async () => {
+    const { run } = await runInWorld(['--memory', '--debug'], {
+      microphone: { speech: true },
+      ollama: { models: ['llama3.2:latest'], ps: [], answer: ANSWER },
+      keys: ['enter', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(run.lines.includes(
+      '[debug] prompt_eval_count=absent prompt_eval_cached_count=absent eval_count=absent load_duration=absent prompt_eval_duration=absent context_length=4096 exchanges_held=1 removed_before_question=0',
+    ), describeRun(run));
+  });
+
+  it('discards a key pressed while voxagent answers, so C then neither clears the conversation nor starts a recording', async () => {
+    const { run, names } = await runInWorld(['--memory'], {
+      microphone: { speech: true },
+      ollama: { models: ['llama3.2:latest'], answer: ANSWER, keyDuring: 'c' },
+      keys: ['enter', 'none', 'h', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.ok(!run.lines.includes('Conversation cleared.'), describeRun(run));
+    assert.ok(run.lines.includes('The conversation holds 1 of up to 10 exchanges.'), describeRun(run));
+    assert.strictEqual(count(names, 'microphone.open'), 1, names.join(', '));
+  });
+});
+
+describe('the interactive loop without --memory', { timeout: 120000 }, () => {
+  it('prints the prompt line of 0.2.0, sends each question on its own, and starts a recording for H and C', async () => {
+    const { run, events, names } = await runInWorld([], {
+      microphone: { speech: true },
+      whisper: { texts: ['First question?', 'Second question?'] },
+      keys: ['h', 'none', 'c', 'none', 'ctrl-c'],
+    });
+
+    assert.strictEqual(run.status, 0, describeRun(run));
+    assert.strictEqual(run.lines.filter((line) => line === 'Press ENTER to speak, or Ctrl+C to quit.').length, 3, describeRun(run));
+    assert.ok(!run.output.includes('H for history'), describeRun(run));
+    assert.strictEqual(names.filter((name) => name === 'microphone.open').length, 2, names.join(', '));
+    assert.ok(!names.includes('ollama.ps'), names.join(', '));
+
+    const sent = events.filter((entry) => entry.event === 'ollama.chat');
+
+    assert.deepStrictEqual(sent.map((entry) => entry.messages), [
+      [{ role: 'user', content: 'First question?' }],
+      [{ role: 'user', content: 'Second question?' }],
+    ]);
+    assert.deepStrictEqual(sent.map((entry) => entry.fields), [['messages', 'model'], ['messages', 'model']]);
   });
 });
 
