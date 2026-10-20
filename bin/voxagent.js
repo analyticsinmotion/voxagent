@@ -51,7 +51,7 @@ Options:
   --list-devices            List the available input devices and exit
   --file <path>             Answer one question recorded in an audio file, then exit
   --denoise                 Reduce background noise before transcription
-  --debug                   Save each recording to debug-capture.wav in the current directory
+  --debug                   Show diagnostics and save each recording to debug-capture.wav
   --help, -h                Show this help message
   --version, -v             Show version number
 `;

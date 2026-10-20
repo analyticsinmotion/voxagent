@@ -6,7 +6,7 @@
   <title>voxagent - Voice-powered terminal agent</title>
   <meta name="description" content="Voice agent for your terminal. Ask questions out loud, get answers from a local model in Ollama. Powered by decibri, whisper.cpp, and Ollama. No API keys.">
   <meta property="og:title" content="voxagent - Voice-powered terminal agent">
-  <meta property="og:description" content="Ask questions out loud, get answers. Your audio and your questions never leave your machine.">
+  <meta property="og:description" content="Ask questions out loud, get answers. Your audio stays on your machine, and with a local model so do your questions.">
   <meta property="og:image" content="https://voxagent.run/assets/voxagent-og-image.png">
   <meta property="og:url" content="https://voxagent.run">
   <meta property="og:type" content="website">
@@ -411,6 +411,7 @@
     .feature-card h3 .icon { color: var(--accent); font-size: 16px; }
 
     .feature-card p { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+    .feature-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
 
     .feature-card code {
       font-family: 'JetBrains Mono', monospace;
@@ -579,7 +580,7 @@
   <div class="hero">
     <div class="container">
       <h1>vox<span class="accent">agent</span></h1>
-      <p class="subtitle">Voice-powered terminal agent. Ask questions out loud, get answers. Your audio and your questions never leave your machine.</p>
+      <p class="subtitle">Voice-powered terminal agent. Ask questions out loud, get answers. Your audio stays on your machine, and with a local model so do your questions.</p>
       <div class="install-row">
         <div class="install-cmd" onclick="copyInstall(this)">
           <span class="dollar">$</span>
@@ -648,7 +649,7 @@
   <section>
     <div class="container">
       <h2>How it <span class="accent">works</span></h2>
-      <p class="section-sub">Three steps, all on your machine. No API keys, and no network request apart from a one-time download of the speech model.</p>
+      <p class="section-sub">Three steps, all on your machine with a local model. Apart from a one-time download of the speech model, voxagent connects only to Ollama on your machine.</p>
       <div class="pipeline">
         <div class="pipeline-step">
           <div class="step-number">Step 01</div>
@@ -668,7 +669,7 @@
           <div class="step-number">Step 03</div>
           <div class="step-icon">🤖</div>
           <h3>Ollama responds</h3>
-          <p>Your local LLM generates the answer. Any Ollama model. Default: llama3.2.</p>
+          <p>Your local LLM, or any other Ollama model, generates the answer. Default: llama3.2.</p>
         </div>
       </div>
     </div>
@@ -682,7 +683,7 @@
       <div class="features-grid">
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Runs locally</h3>
-          <p>Speech recognition and the language model run on your hardware. After a one-time download of the speech model, voxagent talks only to Ollama on your machine. No API keys. No accounts.</p>
+          <p>Speech recognition runs on your hardware, and so does the language model when it is a local one. After a one-time download of the speech model, voxagent talks only to Ollama on your machine. No API keys. No accounts.</p>
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Cross-platform</h3>
@@ -693,8 +694,12 @@
           <p>Works with any Ollama model. Swap models with <code>--model mistral</code> or use the default llama3.2.</p>
         </div>
         <div class="feature-card">
+          <h3><span class="icon">⬡</span> Follow-up questions</h3>
+          <p>Run with <code>--memory</code> to ask follow-up questions. voxagent keeps the conversation until it exits and sends it to the model with each new question. Press H at the prompt to see the conversation and C to clear it.</p>
+        </div>
+        <div class="feature-card">
           <h3><span class="icon">⬡</span> Privacy first</h3>
-          <p>Your audio is held in memory and passed straight to the speech engine on your machine. It is never sent anywhere, and never written to disk unless you turn on debug mode. Your questions go only to Ollama on your machine.</p>
+          <p>Your audio is held in memory and passed straight to the speech engine on your machine, and it is written to disk only in debug mode. voxagent sends your questions, and with <code>--memory</code> your conversation, to Ollama on your machine. With a local model they are answered there, and with an Ollama cloud model, Ollama sends them on to its cloud service.</p>
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Open source</h3>
@@ -702,7 +707,7 @@
         </div>
         <div class="feature-card">
           <h3><span class="icon">⬡</span> Debug mode</h3>
-          <p>Run with <code>--debug</code> to see audio levels and raw whisper output. It also saves each recording to debug-capture.wav in the current directory, which stays until you delete it.</p>
+          <p>Run with <code>--debug</code> to see audio levels and raw whisper output. It also saves each recording to debug-capture.wav in the current directory, which stays until you delete it. With <code>--memory</code>, it adds the token counts after each answer.</p>
         </div>
       </div>
     </div>

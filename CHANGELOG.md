@@ -2,6 +2,18 @@
 
 All notable changes to voxagent are recorded in this file.
 
+## Unreleased
+
+### Added
+
+- `--memory` keeps the conversation for follow-up questions until voxagent exits, and sends it to the model with each new question. At the prompt, H shows the conversation and C clears it.
+- `--context <n>` sets how many recent exchanges `--memory` keeps, from 1 to 50. The default is 10.
+- With `--memory`, `--debug` shows the token counts from Ollama after each answer.
+
+### Fixed
+
+- Keys pressed during startup, or while voxagent transcribes or answers, are discarded, so the next prompt waits for a new press.
+
 ## 0.2.0 - 2026-09-24
 
 ### Added

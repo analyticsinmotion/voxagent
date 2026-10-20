@@ -1,6 +1,6 @@
 # voxagent
 
-> voxagent is a voice agent for the terminal. It records a spoken question with decibri, transcribes it on your machine with whisper.cpp, and prints the answer from a local model in Ollama. Your audio and your questions never leave your machine.
+> voxagent is a voice agent for the terminal. It records a spoken question with decibri, transcribes it on your machine with whisper.cpp, and prints the answer from a local model in Ollama. Your audio stays on your machine, and with a local model so do your questions.
 
 ## Install
 
@@ -31,16 +31,20 @@ Intel Macs, and ARM64 on Windows and Linux, are not supported.
 - voxagent transcribes speech as English, with the whisper model base.en.
 - Press Ctrl+C to quit.
 - The microphone is open only while a recording runs.
-- Each question goes to the model on its own, without the earlier questions or answers.
+- Without --memory, each question goes to the model on its own.
+- With --memory, voxagent keeps the conversation until it exits and sends it to the model with each new question, so you can ask follow-up questions. At the prompt, H shows the conversation and C clears it.
+- By default --memory keeps the 10 most recent exchanges, each a question and its answer, and --context <n> sets that number from 1 to 50. When the conversation holds more exchanges than that, or takes more than half of the model's context window, voxagent removes the oldest exchanges first.
 
 ## Options
 
 - --model <name>: Ollama model to use (default: llama3.2)
+- --memory: Keep the conversation for follow-up questions until voxagent exits
+- --context <n>: Number of recent exchanges --memory keeps, 1 to 50 (default: 10)
 - --device <id-or-name>: Input device to record from (default: the system default)
 - --list-devices: List the available input devices and exit
 - --file <path>: Answer one question recorded in an audio file, then exit
 - --denoise: Reduce background noise before transcription
-- --debug: Save each recording to debug-capture.wav in the current directory
+- --debug: Show diagnostics and save each recording to debug-capture.wav
 - --help, -h: Show this help message
 - --version, -v: Show version number
 
@@ -52,6 +56,7 @@ voxagent --file question.wav answers the question recorded in question.wav, then
 
 - Your audio is held in memory and passed to whisper.cpp in a process voxagent starts on your machine. No audio file is written, except with --debug.
 - Your question is sent to the Ollama server at 127.0.0.1:11434, which answers it with the model you chose. With an Ollama cloud model, Ollama sends the question to its cloud service.
+- With --memory, your conversation is held in memory by voxagent until you press C or voxagent exits, and sent to the Ollama server with each new question. With an Ollama cloud model, Ollama sends the conversation to its cloud service.
 - The whisper model is downloaded once, about 150 MB, from the ggerganov/whisper.cpp repository on Hugging Face at a fixed revision, and checked against its SHA-256. It is stored in .voxagent/models in your home directory, and downloaded again only if that file is missing or has the wrong size.
 - With --debug, each recording is saved to debug-capture.wav in the current directory, replacing the previous one. The file stays until you delete it.
 - Apart from the model download, voxagent connects only to the Ollama server on your machine, and it needs no API key or account.
@@ -59,6 +64,8 @@ voxagent --file question.wav answers the question recorded in question.wav, then
 ## Keeping the model loaded
 
 Ollama keeps a model in memory for 5 minutes by default, and OLLAMA_KEEP_ALIVE, set when the Ollama server starts, changes that time, as the Ollama FAQ describes: https://docs.ollama.com/faq#how-do-i-keep-a-model-loaded-in-memory-or-make-it-unload-immediately
+
+With --memory, the model reads the whole conversation again for the first answer after it unloads. The conversation can use up to half of the model's context window, which is set in Ollama, through the context length setting in the Ollama app or OLLAMA_CONTEXT_LENGTH.
 
 ## Links
 
