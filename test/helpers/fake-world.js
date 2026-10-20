@@ -10,11 +10,19 @@
 //   file        { speech, bytes } for a file that opens, or { error: { code, message } }
 //   microphone  { speech } for a recording that detects speech and ends on silence,
 //               or detects none and ends when ENTER is pressed
-//   ollama      { models, answer }
-//   whisper     { text }
+//   ollama      { models, answer, answers, ps, keyDuring }. answers, when given, holds
+//               the answer to each chat in turn, the last one repeating: a string, an
+//               object { text, counts } whose counts are the count fields of Ollama's
+//               response, or { error } for a chat that fails with that message. ps is
+//               the list of loaded models /api/ps returns
+//   whisper     { text, texts, keyDuring }. texts, when given, holds the transcript of
+//               each recording in turn, the last one repeating
 //   keys        with a value, input looks like a terminal, and each key is pressed
-//               when voxagent next asks for one: "enter", "ctrl-c" or "none"
+//               when voxagent next asks for one: "enter", "h", "c", "ctrl-c" or "none"
 //   platform    { platform, arch } for process.platform and process.arch to report
+//
+// keyDuring names a key that is pressed part way through every transcription or every
+// chat, as a key pressed while voxagent transcribes or answers.
 
 const { EventEmitter } = require('events');
 const fs = require('fs');
@@ -26,6 +34,30 @@ const world = JSON.parse(process.env.VOXAGENT_TEST_WORLD);
 
 function note(event, detail) {
   fs.appendFileSync(world.log, `${JSON.stringify({ event, ...detail })}\n`);
+}
+
+const KEYS = { enter: '\r', h: 'h', c: 'c', 'ctrl-c': '\x03' };
+
+function pressKey(key, detail) {
+  note('terminal.key', { key, ...detail });
+  process.stdin.emit('data', Buffer.from(KEYS[key]));
+}
+
+// Presses a key 10 ms into a call voxagent is waiting on, and lets the call finish 50 ms
+// after the press.
+function pressDuring(key) {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      pressKey(key, { during: true });
+      setTimeout(resolve, 50);
+    }, 10);
+  });
+}
+
+// The item for the given turn from a list given in the world, the last one repeating,
+// or the single value when no list is given.
+function inTurn(list, single, turn) {
+  return list ? list[Math.min(turn, list.length - 1)] : single;
 }
 
 const CHUNK = 3200;
@@ -131,6 +163,8 @@ stubModule('decibri', {
 
 // Ollama
 
+let chats = 0;
+
 class FakeOllama {
   constructor(config) {
     note('ollama.construct', { host: config && config.host });
@@ -141,14 +175,36 @@ class FakeOllama {
     return { models: (world.ollama.models || []).map((name) => ({ name, model: name })) };
   }
 
+  async ps() {
+    note('ollama.ps');
+    return { models: world.ollama.ps || [] };
+  }
+
   async generate(request) {
     note('ollama.generate', { model: request.model });
     return { response: '', done: true };
   }
 
+  // Logs the whole request: the model, every message, the content of the last message,
+  // which is the question, and the names of the fields the request carries.
   async chat(request) {
-    note('ollama.chat', { model: request.model, content: request.messages[0].content });
-    return { message: { role: 'assistant', content: world.ollama.answer } };
+    const turn = chats++;
+    const question = request.messages[request.messages.length - 1];
+
+    note('ollama.chat', { model: request.model, content: question.content, messages: request.messages, fields: Object.keys(request).sort() });
+
+    if (world.ollama.keyDuring) {
+      await pressDuring(world.ollama.keyDuring);
+    }
+
+    const answer = inTurn(world.ollama.answers, world.ollama.answer, turn);
+    const reply = answer !== null && typeof answer === 'object' ? answer : { text: answer };
+
+    if (reply.error) {
+      throw new Error(reply.error);
+    }
+
+    return { message: { role: 'assistant', content: reply.text }, done: true, ...reply.counts };
   }
 }
 
@@ -170,6 +226,8 @@ stubModule(path.join(LIB, 'model.js'), {
 // stand-in keeps those two functions from the real module.
 const { whisperDist, whisperBinary } = require(path.join(LIB, 'whisper.js'));
 
+let transcriptions = 0;
+
 stubModule(path.join(LIB, 'whisper.js'), {
   whisperDist,
   whisperBinary,
@@ -184,8 +242,15 @@ stubModule(path.join(LIB, 'whisper.js'), {
         note('whisper.load', { modelPath });
       },
       async transcribe(audio, modelPath, debug) {
+        const turn = transcriptions++;
+
         note('whisper.transcribe', { bytes: audio.length, debug });
-        return world.whisper.text;
+
+        if (world.whisper.keyDuring) {
+          await pressDuring(world.whisper.keyDuring);
+        }
+
+        return inTurn(world.whisper.texts, world.whisper.text, turn);
       },
       stop() {
         note('whisper.stop');
@@ -211,7 +276,6 @@ if (world.platform) {
 if (world.keys) {
   const keys = [...world.keys];
   const realWrite = process.stdout.write.bind(process.stdout);
-  const BYTES = { enter: 0x0d, 'ctrl-c': 0x03 };
 
   Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
   process.stdin.setRawMode = (on) => {
@@ -227,10 +291,7 @@ if (world.keys) {
       const key = keys.shift();
 
       if (key && key !== 'none') {
-        setTimeout(() => {
-          note('terminal.key', { key });
-          process.stdin.emit('data', Buffer.from([BYTES[key]]));
-        }, 30);
+        setTimeout(() => pressKey(key), 30);
       }
     }
 

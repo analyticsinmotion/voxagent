@@ -1,9 +1,10 @@
 'use strict';
 
 // Checks what voxagent confirms before it starts: the Ollama model match, the one
-// Ollama client, the platforms the whisper addon can load on, the missing Visual
-// C++ runtime check, the missing Linux system library check for decibri and the
-// whisper addon, and the supported Node range and dependency versions.
+// Ollama client, the request that carries a conversation and the context length read
+// for it, the platforms the whisper addon can load on, the missing Visual C++ runtime
+// check, the missing Linux system library check for decibri and the whisper addon,
+// and the supported Node range and dependency versions.
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -99,6 +100,85 @@ describe('the Ollama client', { timeout: 120000 }, () => {
     assert.strictEqual(await llm.ask('two', 'llama3.2', host), 'an answer');
     assert.strictEqual(await llm.ask('three', 'llama3.2', host), 'an answer');
     assert.strictEqual(constructed, 1);
+  });
+});
+
+describe('a request that carries a conversation, against a stub server', { timeout: 120000 }, () => {
+  const messages = [
+    { role: 'system', content: 'Answer the latest question.' },
+    { role: 'user', content: 'What is the capital of France?' },
+    { role: 'assistant', content: 'The capital of France is Paris.' },
+    { role: 'user', content: 'How many people live there?' },
+  ];
+
+  it('sends the messages in order with the model and no options, and returns the answer with the counts', async () => {
+    const counts = { prompt_eval_count: 55, prompt_eval_cached_count: 39, eval_count: 63, load_duration: 23000000, prompt_eval_duration: 20000000 };
+    const server = ollamaServer(['llama3.2:latest'], 'About two million people.', { counts });
+    const host = await listen(server);
+
+    try {
+      const llm = require(lib('llm'));
+      const reply = await llm.chat(messages, 'llama3.2', host);
+
+      assert.deepStrictEqual(reply, {
+        content: 'About two million people.',
+        promptEvalCount: 55,
+        promptEvalCachedCount: 39,
+        evalCount: 63,
+        loadDuration: 23000000,
+        promptEvalDuration: 20000000,
+      });
+
+      const request = server.requests.find((entry) => entry.url === '/api/chat').body;
+
+      assert.deepStrictEqual(request.messages, messages);
+      assert.strictEqual(request.model, 'llama3.2');
+      assert.deepStrictEqual(Object.keys(request).sort(), ['messages', 'model', 'stream']);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('reads the context length /api/ps lists for the loaded model', async () => {
+    const ps = [
+      { name: 'other-model:latest', model: 'other-model:latest', context_length: 32768 },
+      { name: 'llama3.2:latest', model: 'llama3.2:latest', context_length: 16384 },
+    ];
+    const server = ollamaServer(['llama3.2:latest'], 'ok', { ps });
+    const host = await listen(server);
+
+    try {
+      assert.strictEqual(await require(lib('llm')).contextLength('llama3.2', host), 16384);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('uses 4096 when /api/ps lists the model with no length or does not list it', async () => {
+    const listings = [
+      [],
+      [{ name: 'other-model:latest', model: 'other-model:latest', context_length: 32768 }],
+      [{ name: 'llama3.2:latest', model: 'llama3.2:latest' }],
+    ];
+
+    for (const ps of listings) {
+      const server = ollamaServer(['llama3.2:latest'], 'ok', { ps });
+      const host = await listen(server);
+
+      try {
+        assert.strictEqual(await require(lib('llm')).contextLength('llama3.2', host), 4096, JSON.stringify(ps));
+      } finally {
+        await close(server);
+      }
+    }
+  });
+
+  it('uses 4096 when /api/ps cannot be read', async () => {
+    const server = http.createServer();
+    const host = await listen(server);
+    await close(server);
+
+    assert.strictEqual(await require(lib('llm')).contextLength('llama3.2', host), 4096);
   });
 });
 

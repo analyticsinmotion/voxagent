@@ -2,7 +2,7 @@
 
 voxagent is a voice agent for the terminal. It records a spoken question with decibri, transcribes it on your machine with whisper.cpp, and prints the answer from a local model in Ollama.
 
-Your audio and your questions never leave your machine.
+Your audio stays on your machine, and with a local model so do your questions.
 
 <!-- badges: start -->
 <table>
@@ -38,7 +38,7 @@ voxagent
 
 ```text
 
-voxagent v0.2.0 - voice-powered terminal
+voxagent v0.3.0 - voice-powered terminal
 
 Checking Ollama connection...
 Ollama connected.
@@ -87,9 +87,11 @@ Press Enter at the prompt and ask your question out loud. The recording stops by
 | You press Enter while recording | Recording stops at once |
 | No speech is heard in the first 8 seconds | Recording stops, and nothing is transcribed |
 | Recording reaches 60 seconds | Recording stops, and what was recorded is transcribed |
+| You press H at the prompt, with `--memory` | voxagent shows the conversation |
+| You press C at the prompt, with `--memory` | voxagent clears the conversation |
 | You press Ctrl+C | voxagent exits |
 
-voxagent transcribes speech as English, with the whisper model base.en. The microphone is open only while a recording runs. Each question goes to the model on its own, without the earlier questions or answers.
+voxagent transcribes speech as English, with the whisper model base.en. The microphone is open only while a recording runs. Without `--memory`, each question goes to the model on its own. With `--memory`, it goes with the earlier questions and answers that voxagent keeps, as described under Follow-up questions.
 
 ## Requirements
 
@@ -113,11 +115,13 @@ Every option voxagent accepts, as `voxagent --help` lists them.
 | Option | Argument | What it does |
 | --- | --- | --- |
 | `--model` | `<name>` | Ollama model to use (default: llama3.2) |
+| `--memory` | | Keep the conversation for follow-up questions until voxagent exits |
+| `--context` | `<n>` | Number of recent exchanges --memory keeps, 1 to 50 (default: 10) |
 | `--device` | `<id-or-name>` | Input device to record from (default: the system default) |
 | `--list-devices` | | List the available input devices and exit |
 | `--file` | `<path>` | Answer one question recorded in an audio file, then exit |
 | `--denoise` | | Reduce background noise before transcription |
-| `--debug` | | Save each recording to debug-capture.wav in the current directory |
+| `--debug` | | Show diagnostics and save each recording to debug-capture.wav |
 | `--help`, `-h` | | Show this help message |
 | `--version`, `-v` | | Show version number |
 
@@ -133,7 +137,7 @@ voxagent --file question.wav
 
 ```text
 
-voxagent v0.2.0 - voice-powered terminal
+voxagent v0.3.0 - voice-powered terminal
 
 Read 2.6s of audio (84000 bytes) from question.wav
 Checking Ollama connection...
@@ -160,6 +164,68 @@ The capital of Australia is Canberra.
 
 The file can be WAV, AIFF, AIFF-C or FLAC. voxagent reads it before loading any model, and exits 1 at once if it cannot be read or holds no speech.
 
+## Follow-up questions
+
+`--memory` keeps the conversation until voxagent exits and sends it to the model with each new question, so you can ask follow-up questions. The output below is a run with a question, a follow-up and H, ended with Ctrl+C.
+
+```bash
+voxagent --memory
+```
+
+```text
+
+voxagent v0.3.0 - voice-powered terminal
+
+Checking Ollama connection...
+Ollama connected.
+Loading llama3.2...
+llama3.2 ready.
+Checking whisper model...
+Loading whisper model...
+Whisper model ready.
+
+Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.
+Recording. It stops when you stop speaking, or press ENTER to stop now.
+Captured 4.2s of audio (134824 bytes)
+Transcribing...
+
+You: What is the capital of Australia?
+
+Thinking...
+
+The capital of Australia is Canberra.
+
+Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.
+Recording. It stops when you stop speaking, or press ENTER to stop now.
+Captured 3.9s of audio (125544 bytes)
+Transcribing...
+
+You: How many people live there?
+
+Thinking...
+
+As of my knowledge cutoff in 2023, the population of Canberra is approximately 415,000 people. However, please note that this number may have changed since my knowledge cutoff date.
+
+Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.
+The conversation holds 2 of up to 10 exchanges.
+
+1. You: What is the capital of Australia?
+   The capital of Australia is Canberra.
+
+2. You: How many people live there?
+   As of my knowledge cutoff in 2023, the population of Canberra is approximately 415,000 people...
+
+Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.
+
+```
+
+| Key at the prompt | What it does |
+| --- | --- |
+| H | Shows the exchanges sent with the next question, each question in full and the first line of its answer |
+| C | Clears the conversation, so the next question starts a new one |
+
+By default voxagent keeps the 10 most recent exchanges, each a question and its answer, and `--context <n>` sets that number from 1 to 50. When the conversation holds more exchanges than that, or takes more than half of the model's context window, voxagent removes the oldest exchanges first.
+
 ## Privacy and the network
 
 Speech recognition runs on your machine, and so does the language model when it is a local one. This is where each kind of data goes.
@@ -168,6 +234,7 @@ Speech recognition runs on your machine, and so does the language model when it 
 | --- | --- |
 | Your audio | Held in memory and passed to whisper.cpp in a process voxagent starts on your machine. No audio file is written, except with `--debug` |
 | Your question | Sent to the Ollama server at `127.0.0.1:11434`, which answers it with the model you chose. With an Ollama cloud model, Ollama sends the question to its cloud service |
+| Your conversation, with `--memory` | Held in memory by voxagent until you press C or voxagent exits, and sent to the Ollama server with each new question. With an Ollama cloud model, Ollama sends the conversation to its cloud service |
 | The whisper model | Downloaded once, about 150 MB, from the `ggerganov/whisper.cpp` repository on Hugging Face at a fixed revision, and checked against its SHA-256. It is stored in `.voxagent/models` in your home directory, and downloaded again only if that file is missing or has the wrong size |
 | `--debug` recordings | Each recording is saved to `debug-capture.wav` in the current directory, replacing the previous one. The file stays until you delete it |
 
@@ -176,6 +243,8 @@ Apart from the model download, voxagent connects only to the Ollama server on yo
 ## Keeping the model loaded
 
 Ollama keeps a model in memory for 5 minutes by default, and `OLLAMA_KEEP_ALIVE`, set when the Ollama server starts, changes that time, as the [Ollama FAQ](https://docs.ollama.com/faq#how-do-i-keep-a-model-loaded-in-memory-or-make-it-unload-immediately) describes.
+
+With `--memory`, the model reads the whole conversation again for the first answer after it unloads. The conversation can use up to half of the model's context window, which is set in Ollama, through the context length setting in the Ollama app or `OLLAMA_CONTEXT_LENGTH`.
 
 ## Licence
 

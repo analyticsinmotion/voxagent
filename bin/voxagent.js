@@ -4,9 +4,10 @@
 const fs = require('fs');
 const { parseArgs } = require('node:util');
 
-const { waitForKey, restoreTerminal, print, printError, printTranscript, printResponse, printStatus, printBanner } = require('../lib/ui');
+const { startReadingKeys, waitForKey, restoreTerminal, print, printError, printTranscript, printResponse, printStatus, printBanner } = require('../lib/ui');
 const { ensureModel } = require('../lib/model');
-const { checkConnection, hasModel, loadModel: loadLanguageModel, ask, DEFAULT_MODEL } = require('../lib/llm');
+const { checkConnection, hasModel, loadModel: loadLanguageModel, ask, chat, contextLength: loadedContextLength, DEFAULT_MODEL } = require('../lib/llm');
+const { createConversation, MIN_EXCHANGES, MAX_EXCHANGES, DEFAULT_EXCHANGES } = require('../lib/conversation');
 const { whisperDist, whisperBinary } = require('../lib/whisper');
 
 const VERSION = require('../package.json').version;
@@ -26,6 +27,8 @@ const LINUX_SYSTEM_LIBRARIES = {
 
 const OPTIONS = {
   model: { type: 'string' },
+  memory: { type: 'boolean' },
+  context: { type: 'string' },
   device: { type: 'string' },
   'list-devices': { type: 'boolean' },
   file: { type: 'string' },
@@ -42,11 +45,13 @@ Voice-powered terminal agent.
 
 Options:
   --model <name>            Ollama model to use (default: ${DEFAULT_MODEL})
+  --memory                  Keep the conversation for follow-up questions until voxagent exits
+  --context <n>             Number of recent exchanges --memory keeps, ${MIN_EXCHANGES} to ${MAX_EXCHANGES} (default: ${DEFAULT_EXCHANGES})
   --device <id-or-name>     Input device to record from (default: the system default)
   --list-devices            List the available input devices and exit
   --file <path>             Answer one question recorded in an audio file, then exit
   --denoise                 Reduce background noise before transcription
-  --debug                   Save each recording to debug-capture.wav in the current directory
+  --debug                   Show diagnostics and save each recording to debug-capture.wav
   --help, -h                Show this help message
   --version, -v             Show version number
 `;
@@ -59,14 +64,22 @@ function usageError(message) {
   process.exit(2);
 }
 
+const CONTEXT_RANGE_MESSAGE = `Option '--context' takes a number of exchanges from ${MIN_EXCHANGES} to ${MAX_EXCHANGES}.`;
+
 // parseArgs reports each kind of mistake with its own code and a message that already
-// names the option. The one exception is an option value that itself looks like an
-// option, whose built-in message runs to three lines, so that case is reworded.
+// names the option. An option value that itself looks like an option gets a built-in
+// message that runs to three lines, so that case is reworded. A --context value that is
+// missing, or that looks like an option, such as -1, gets the message every other
+// --context value outside the range gets.
 function argumentErrorMessage(err) {
   const firstLine = String(err.message).split('\n')[0].trim();
+  const named = firstLine.match(/'([^']+)'/);
+
+  if (err.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' && named && named[1].split(' ')[0] === '--context') {
+    return CONTEXT_RANGE_MESSAGE;
+  }
 
   if (err.code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE' && firstLine.endsWith('argument is ambiguous.')) {
-    const named = firstLine.match(/'([^']+)'/);
     return `Option ${named ? `'${named[1]}'` : 'given'} requires a value.`;
   }
 
@@ -87,6 +100,23 @@ function requireValue(values, name) {
   }
 
   return value;
+}
+
+// --context takes a whole number of exchanges within the accepted range, and the
+// default applies without it. parseArgs reads every option value as a string, so the
+// number is checked here.
+function exchangeCount(value) {
+  if (value === undefined) {
+    return DEFAULT_EXCHANGES;
+  }
+
+  const count = /^[0-9]+$/.test(value) ? Number(value) : NaN;
+
+  if (!(count >= MIN_EXCHANGES && count <= MAX_EXCHANGES)) {
+    usageError(CONTEXT_RANGE_MESSAGE);
+  }
+
+  return count;
 }
 
 function parseCommandLine(argv) {
@@ -112,6 +142,8 @@ function parseCommandLine(argv) {
 
   const settings = {
     model: requireValue(values, 'model') || DEFAULT_MODEL,
+    memory: values.memory === true,
+    context: exchangeCount(values.context),
     device: requireValue(values, 'device'),
     file: requireValue(values, 'file'),
     listDevices: values['list-devices'] === true,
@@ -123,6 +155,18 @@ function parseCommandLine(argv) {
   // given alongside it would be ignored in silence.
   if (settings.file !== undefined && settings.device !== undefined) {
     usageError("Options '--file' and '--device' cannot be combined.");
+  }
+
+  // --file answers one question and exits, so a conversation for --memory to keep
+  // never forms.
+  if (settings.file !== undefined && settings.memory) {
+    usageError("Options '--file' and '--memory' cannot be combined.");
+  }
+
+  // --context sets the number of exchanges --memory keeps, so it takes effect only
+  // together with --memory.
+  if (values.context !== undefined && !settings.memory) {
+    usageError("Option '--context' requires '--memory'.");
   }
 
   return settings;
@@ -359,9 +403,10 @@ function resolveRequestedDevice(selector) {
 //
 // Everything from the Ollama check onward, shared by the interactive loop and --file.
 // The language model is confirmed installed and then loaded, and the whisper model is
-// checked and then loaded in the transcription child. Returns the whisper model path,
-// and exits 1 on any failure.
-async function prepareModels(model, debug) {
+// checked and then loaded in the transcription child. With memory, the context length
+// of the loaded language model is read as well. Returns the whisper model path and that
+// context length, which is null without memory, and exits 1 on any failure.
+async function prepareModels(model, debug, memory) {
   // Preflight: check Ollama
   printStatus('Checking Ollama connection...');
   if (!(await checkConnection())) {
@@ -396,6 +441,10 @@ async function prepareModels(model, debug) {
   }
   printStatus(`${model} ready.`);
 
+  // The conversation --memory keeps is held within the context length the model was
+  // just loaded with, which is read once, here.
+  const contextLength = memory ? await loadedContextLength(model) : null;
+
   // Preflight: ensure whisper model
   printStatus('Checking whisper model...');
   let modelPath;
@@ -419,7 +468,7 @@ async function prepareModels(model, debug) {
   }
   printStatus('Whisper model ready.');
 
-  return modelPath;
+  return { modelPath, contextLength };
 }
 
 // --file
@@ -449,7 +498,7 @@ async function answerFile(file, model, denoise, debug) {
     process.exit(1);
   }
 
-  const modelPath = await prepareModels(model, debug);
+  const { modelPath } = await prepareModels(model, debug, false);
 
   try {
     printStatus('Transcribing...');
@@ -473,10 +522,54 @@ async function answerFile(file, model, denoise, debug) {
   process.exit(0);
 }
 
+// --memory
+
+// Asks a question with the conversation so far and prints the answer. The exchange
+// joins the conversation only once its answer is printed, so a request that fails adds
+// nothing. With --debug, one line after the answer gives the counts Ollama reports for
+// the request, the context length in use, the exchanges held and the exchanges removed
+// before the question was sent.
+async function answerWithMemory(conversation, text, model, debug) {
+  const turn = conversation.request(text);
+  const reply = await chat(turn.messages, model);
+
+  printResponse(reply.content);
+  conversation.add(turn, reply);
+
+  if (debug) {
+    printStatus(memoryDebugLine(reply, turn, conversation));
+  }
+}
+
+function memoryDebugLine(reply, turn, conversation) {
+  const count = (value) => (Number.isFinite(value) ? String(value) : 'absent');
+  const ms = (ns) => (Number.isFinite(ns) ? `${Math.round(ns / 1e6)}ms` : 'absent');
+
+  return [
+    '[debug]',
+    `prompt_eval_count=${count(reply.promptEvalCount)}`,
+    `prompt_eval_cached_count=${count(reply.promptEvalCachedCount)}`,
+    `eval_count=${count(reply.evalCount)}`,
+    `load_duration=${ms(reply.loadDuration)}`,
+    `prompt_eval_duration=${ms(reply.promptEvalDuration)}`,
+    `context_length=${conversation.contextLength}`,
+    `exchanges_held=${conversation.exchanges.length}`,
+    `removed_before_question=${turn.removed}`,
+  ].join(' ');
+}
+
 // Main
 
+const PROMPT = 'Press ENTER to speak, or Ctrl+C to quit.';
+const MEMORY_PROMPT = 'Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.';
+
+// With --memory, these keys at the prompt show the conversation and clear it. Every other
+// key starts a recording.
+const HISTORY_KEYS = ['h', 'H'];
+const CLEAR_KEYS = ['c', 'C'];
+
 async function main() {
-  const { model, device, file, listDevices, denoise, debug } = parseCommandLine(process.argv);
+  const { model, memory, context, device, file, listDevices, denoise, debug } = parseCommandLine(process.argv);
 
   if (listDevices) {
     printDevices();
@@ -508,6 +601,11 @@ async function main() {
 
   registerCleanup();
 
+  // Keys are read from here until voxagent exits, so a key pressed during startup, or
+  // while voxagent transcribes or answers, is discarded rather than taken as a press at
+  // the next prompt.
+  startReadingKeys();
+
   printBanner(VERSION);
 
   // The device is resolved first, so that a selector naming no device, or more than one,
@@ -518,16 +616,32 @@ async function main() {
     printStatus(`Recording from ${selectedDevice.name}.`);
   }
 
-  const modelPath = await prepareModels(model, debug);
+  const { modelPath, contextLength } = await prepareModels(model, debug, memory);
 
   const recorder = loadCapture();
+  const conversation = memory ? createConversation({ limit: context, contextLength }) : null;
 
   print('');
 
   // Main loop
   while (true) {
-    print('Press ENTER to speak, or Ctrl+C to quit.');
-    await waitForKey().promise;
+    print(conversation ? MEMORY_PROMPT : PROMPT);
+
+    const prompt = waitForKey();
+    await prompt.promise;
+
+    if (conversation && HISTORY_KEYS.includes(prompt.key)) {
+      print(conversation.view());
+      print('');
+      continue;
+    }
+
+    if (conversation && CLEAR_KEYS.includes(prompt.key)) {
+      conversation.clear();
+      print('Conversation cleared.');
+      print('');
+      continue;
+    }
 
     let result;
 
@@ -582,8 +696,14 @@ async function main() {
       printTranscript(text);
 
       printStatus('\nThinking...');
-      const response = await ask(text, model);
-      printResponse(response);
+
+      if (conversation) {
+        await answerWithMemory(conversation, text, model, debug);
+      } else {
+        const response = await ask(text, model);
+        printResponse(response);
+      }
+
       print('');
     } catch (err) {
       printError(err.message);

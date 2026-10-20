@@ -187,11 +187,10 @@ describe('the audio a recording returns', { timeout: 20000 }, () => {
 });
 
 describe('the key wait after a recording ends by itself', { timeout: 20000 }, () => {
-  it('leaves no stdin listener and takes the terminal out of raw mode', async () => {
+  it('is cancelled, so the next key press ends the next wait and the terminal stays in raw mode', async () => {
     const terminal = installFakeStdin();
 
     try {
-      const before = terminal.stdin.listenerCount('data');
       const engine = fakeEngine({
         onOpen: (mic) => {
           mic.emit('data', chunk(3200, 1));
@@ -202,14 +201,19 @@ describe('the key wait after a recording ends by itself', { timeout: 20000 }, ()
       });
 
       const stopKey = ui.waitForKey();
-      const during = terminal.stdin.listenerCount('data');
+      const result = await capture.record({ engine, noSpeechMs: 5000, stopKey });
 
-      await capture.record({ engine, noSpeechMs: 5000, stopKey });
+      assert.strictEqual(result.ending, capture.ENDING.SPEECH_ENDED);
+      assert.strictEqual(await stopKey.promise, 'cancelled');
 
-      assert.strictEqual(during, before + 1);
-      assert.strictEqual(terminal.stdin.listenerCount('data'), before);
-      assert.deepStrictEqual(terminal.stdin.rawModes, [true, false]);
+      const next = ui.waitForKey();
+      terminal.stdin.emit('data', Buffer.from('\r'));
+
+      assert.strictEqual(await next.promise, 'key');
+      assert.strictEqual(stopKey.key, null);
+      assert.deepStrictEqual(terminal.stdin.rawModes, [true]);
     } finally {
+      ui.restoreTerminal();
       terminal.restore();
     }
   });

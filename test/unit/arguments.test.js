@@ -46,12 +46,12 @@ async function runBlocked(args, options) {
 }
 
 describe('declared options and the usage text', () => {
-  it('declares exactly eight options, and USAGE lists each one and no other', () => {
+  it('declares exactly ten options, and USAGE lists each one and no other', () => {
     const declared = Object.keys(cli.OPTIONS).sort();
     const printed = [...new Set(cli.USAGE.match(/--[a-z-]+/g))].map((flag) => flag.slice(2)).sort();
     const shorts = Object.values(cli.OPTIONS).filter((spec) => spec.short).map((spec) => `-${spec.short}`);
 
-    assert.deepStrictEqual(declared, ['debug', 'denoise', 'device', 'file', 'help', 'list-devices', 'model', 'version']);
+    assert.deepStrictEqual(declared, ['context', 'debug', 'denoise', 'device', 'file', 'help', 'list-devices', 'memory', 'model', 'version']);
     assert.deepStrictEqual(printed, declared);
     assert.deepStrictEqual(shorts.sort(), ['-h', '-v']);
 
@@ -67,6 +67,43 @@ describe('declared options and the usage text', () => {
   it('describes --file as answering one question recorded in an audio file, then exiting', () => {
     const line = cli.USAGE.split('\n').find((text) => text.trimStart().startsWith('--file'));
     assert.strictEqual(line, '  --file <path>             Answer one question recorded in an audio file, then exit');
+  });
+
+  it('lists --memory and --context after --model, each description starting in column 29', () => {
+    const lines = cli.USAGE.split('\n');
+    const at = lines.findIndex((text) => text.trimStart().startsWith('--model'));
+
+    assert.deepStrictEqual(lines.slice(at + 1, at + 3), [
+      '  --memory                  Keep the conversation for follow-up questions until voxagent exits',
+      '  --context <n>             Number of recent exchanges --memory keeps, 1 to 50 (default: 10)',
+    ]);
+
+    for (const line of lines.filter((text) => text.startsWith('  --'))) {
+      assert.match(line, /^ {2}\S.{25}\S/, line);
+      assert.strictEqual(line[27], ' ', line);
+    }
+  });
+});
+
+describe('--memory and --context', () => {
+  const parse = (...args) => {
+    const settings = cli.parseCommandLine(['node', 'voxagent', ...args]);
+    return { memory: settings.memory, context: settings.context };
+  };
+
+  it('keeps no conversation by default', () => {
+    assert.strictEqual(parse().memory, false);
+  });
+
+  it('keeps 10 exchanges with --memory alone', () => {
+    assert.deepStrictEqual(parse('--memory'), { memory: true, context: 10 });
+  });
+
+  it('accepts --context from 1 to 50 with --memory, in either order and with =', () => {
+    assert.deepStrictEqual(parse('--memory', '--context', '1'), { memory: true, context: 1 });
+    assert.deepStrictEqual(parse('--memory', '--context', '50'), { memory: true, context: 50 });
+    assert.deepStrictEqual(parse('--context', '7', '--memory'), { memory: true, context: 7 });
+    assert.deepStrictEqual(parse('--memory', '--context=25'), { memory: true, context: 25 });
   });
 });
 
@@ -101,6 +138,55 @@ describe('argument mistakes', { timeout: 120000 }, () => {
 
     assert.strictEqual(run.status, 2, describeRun(run));
     assert.deepStrictEqual(run.lines, ["Error: Options '--file' and '--device' cannot be combined.", HINT]);
+    assert.deepStrictEqual(attempts, []);
+  });
+
+  const contextCases = [
+    ['--context with no value', ['--memory', '--context']],
+    ['--context followed by another option', ['--context', '--memory']],
+    ['--context= with an empty value', ['--memory', '--context=']],
+    ['--context abc', ['--memory', '--context', 'abc']],
+    ['--context 0', ['--memory', '--context', '0']],
+    ['--context 51', ['--memory', '--context', '51']],
+    ['--context 2.5', ['--memory', '--context', '2.5']],
+    ['--context -1', ['--memory', '--context', '-1']],
+    ['--context=-1', ['--memory', '--context=-1']],
+    ['--context 4096', ['--memory', '--context', '4096']],
+  ];
+
+  for (const [label, args] of contextCases) {
+    it(`${label} exits 2 saying --context takes a number of exchanges from 1 to 50, with the help hint`, async () => {
+      const { run, attempts } = await runBlocked(args);
+
+      assert.strictEqual(run.status, 2, describeRun(run));
+      assert.deepStrictEqual(run.lines, ["Error: Option '--context' takes a number of exchanges from 1 to 50.", HINT]);
+      assert.deepStrictEqual(attempts, []);
+    });
+  }
+
+  it('--context without --memory exits 2 saying it requires --memory, with the help hint', async () => {
+    for (const args of [['--context', '5'], ['--file', 'question.wav', '--context', '5']]) {
+      const { run, attempts } = await runBlocked(args);
+
+      assert.strictEqual(run.status, 2, describeRun(run));
+      assert.deepStrictEqual(run.lines, ["Error: Option '--context' requires '--memory'.", HINT]);
+      assert.deepStrictEqual(attempts, []);
+    }
+  });
+
+  it('--file with --memory exits 2 saying the two cannot be combined, with the help hint', async () => {
+    const { run, attempts } = await runBlocked(['--file', 'question.wav', '--memory']);
+
+    assert.strictEqual(run.status, 2, describeRun(run));
+    assert.deepStrictEqual(run.lines, ["Error: Options '--file' and '--memory' cannot be combined.", HINT]);
+    assert.deepStrictEqual(attempts, []);
+  });
+
+  it('--memory with a value exits 2 with one line naming the problem and the help hint', async () => {
+    const { run, attempts } = await runBlocked(['--memory=yes']);
+
+    assert.strictEqual(run.status, 2, describeRun(run));
+    assert.deepStrictEqual(run.lines, ["Error: Option '--memory' does not take an argument", HINT]);
     assert.deepStrictEqual(attempts, []);
   });
 });

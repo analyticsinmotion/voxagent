@@ -22,6 +22,7 @@ const PUBLISHED = [
   'README.md',
   'bin/voxagent.js',
   'lib/capture.js',
+  'lib/conversation.js',
   'lib/llm.js',
   'lib/model.js',
   'lib/stt.js',
