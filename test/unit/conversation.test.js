@@ -24,6 +24,12 @@ function exchange(conversation, question, answer, promptEvalCount, evalCount) {
 
 const questions = (turn) => turn.messages.filter((message) => message.role === 'user').map((message) => message.content);
 
+// A first line that the history view cuts right after text: the text, a space, then 100
+// characters with no space.
+const cutAfter = (text) => `${text} ${'x'.repeat(100)}`;
+
+const MARKS = ['.', ',', ';', ':', '!', '?'];
+
 describe('the request messages', () => {
   it('start with the system message, carry the exchanges kept oldest first, and end with the new question', () => {
     const conversation = createConversation({ limit: 10, contextLength: 4096 });
@@ -219,6 +225,34 @@ describe('the history view', () => {
     assert.strictEqual(firstLine(`${'a'.repeat(99)} bc`), `${'a'.repeat(99)}...`);
     assert.strictEqual(firstLine('a'.repeat(150)), `${'a'.repeat(100)}...`);
     assert.strictEqual(firstLine('\n\n  The first line.\nThe second line.'), 'The first line.');
+  });
+
+  it('removes any of . , ; : ! ? that end the cut text before it adds the three dots', () => {
+    for (const mark of MARKS) {
+      assert.strictEqual(firstLine(cutAfter(`About 415,000 people${mark}`)), 'About 415,000 people...', `cut text ending in ${mark}`);
+    }
+
+    assert.strictEqual(firstLine(cutAfter('About 415,000 people?!')), 'About 415,000 people...');
+    assert.strictEqual(firstLine(cutAfter('About 415,000 people...')), 'About 415,000 people...');
+    assert.strictEqual(firstLine(cutAfter('About 415,000 people .')), 'About 415,000 people...');
+    assert.strictEqual(firstLine(`${'a'.repeat(99)}.${'b'.repeat(50)}`), `${'a'.repeat(99)}...`);
+    assert.strictEqual(
+      firstLine('As of my knowledge cutoff in 2023, the population of Canberra is approximately 415,000 people. However, please note that this number may have changed since my knowledge cutoff date.'),
+      'As of my knowledge cutoff in 2023, the population of Canberra is approximately 415,000 people...',
+    );
+  });
+
+  it('keeps a cut text that ends in a letter whole, before the three dots', () => {
+    assert.strictEqual(firstLine(cutAfter('About 415,000 people')), 'About 415,000 people...');
+  });
+
+  it('returns a first line short enough to need no cut as it is, with its punctuation', () => {
+    for (const mark of MARKS) {
+      assert.strictEqual(firstLine(`The capital of Australia is Canberra${mark}`), `The capital of Australia is Canberra${mark}`, `first line ending in ${mark}`);
+    }
+
+    assert.strictEqual(firstLine(`${'a'.repeat(99)}.`), `${'a'.repeat(99)}.`);
+    assert.strictEqual(firstLine('Really?!\nMore.'), 'Really?!');
   });
 });
 

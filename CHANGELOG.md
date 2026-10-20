@@ -2,7 +2,7 @@
 
 All notable changes to voxagent are recorded in this file.
 
-## Unreleased
+## 0.3.0 - 2026-10-20
 
 ### Added
 

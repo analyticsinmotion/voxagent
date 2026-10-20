@@ -38,7 +38,7 @@ voxagent
 
 ```text
 
-voxagent v0.2.0 - voice-powered terminal
+voxagent v0.3.0 - voice-powered terminal
 
 Checking Ollama connection...
 Ollama connected.
@@ -137,7 +137,7 @@ voxagent --file question.wav
 
 ```text
 
-voxagent v0.2.0 - voice-powered terminal
+voxagent v0.3.0 - voice-powered terminal
 
 Read 2.6s of audio (84000 bytes) from question.wav
 Checking Ollama connection...
@@ -174,7 +174,7 @@ voxagent --memory
 
 ```text
 
-voxagent v0.2.0 - voice-powered terminal
+voxagent v0.3.0 - voice-powered terminal
 
 Checking Ollama connection...
 Ollama connected.
@@ -213,7 +213,7 @@ The conversation holds 2 of up to 10 exchanges.
    The capital of Australia is Canberra.
 
 2. You: How many people live there?
-   As of my knowledge cutoff in 2023, the population of Canberra is approximately 415,000 people....
+   As of my knowledge cutoff in 2023, the population of Canberra is approximately 415,000 people...
 
 Press ENTER to speak, H for history, C to clear, or Ctrl+C to quit.
 

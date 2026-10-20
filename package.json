@@ -1,6 +1,6 @@
 {
   "name": "voxagent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Voice-powered terminal agent. Ask questions out loud and get answers from a local model in Ollama.",
   "bin": {
     "voxagent": "./bin/voxagent.js"
